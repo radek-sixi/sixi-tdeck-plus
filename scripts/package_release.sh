@@ -100,9 +100,8 @@ done
 if [[ ${#FW_IMAGES[@]} -gt 0 ]]; then
   add_legal "${FW_DIR}"
   for f in "${FW_IMAGES[@]}"; do cp "${DIST}/${f}" "${FW_DIR}/"; done
-  need "${ROOT_DIR}/scripts/flash_easy.sh"
-  install -m 0755 "${ROOT_DIR}/scripts/flash_easy.sh" "${FW_DIR}/flash_easy.sh"
-  [[ -f "${ROOT_DIR}/docs/FLASHING.md" ]] && cp "${ROOT_DIR}/docs/FLASHING.md" "${FW_DIR}/"
+  need "${ROOT_DIR}/docs/FLASHING.md"
+  cp "${ROOT_DIR}/docs/FLASHING.md" "${FW_DIR}/"
   make_tgz "${DIST}/faro-${VERSION}-firmware.tar.gz" "${FW_DIR}"
 fi
 
@@ -121,11 +120,10 @@ if [[ -n "${HOST_BINS// /}" ]]; then
   LNX_DIR="${STAGE}/faro-${VERSION}-linux-${ARCH}"
   add_legal "${LNX_DIR}"
   for BIN in ${HOST_BINS}; do install -m 0755 "${HOST_BUILD}/${BIN}" "${LNX_DIR}/${BIN}"; done
-  for SCRIPT_FILE in run_pc_app.sh tbeam_wifi_pc.py make_sd_map.py; do
+  for SCRIPT_FILE in make_sd_map.py; do
     need "${ROOT_DIR}/scripts/${SCRIPT_FILE}"
     install -m 0755 "${ROOT_DIR}/scripts/${SCRIPT_FILE}" "${LNX_DIR}/${SCRIPT_FILE}"
   done
-  [[ -f "${ROOT_DIR}/docs/QUICKSTART_PL.md" ]] && cp "${ROOT_DIR}/docs/QUICKSTART_PL.md" "${LNX_DIR}/"
   make_tgz "${DIST}/faro-${VERSION}-linux-${ARCH}.tar.gz" "${LNX_DIR}"
 
   PKG_DIR="${STAGE}/faro-desktop_${VERSION}_${DEBARCH}"
