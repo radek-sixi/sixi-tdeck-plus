@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Faro v0.9.0 — Web Flasher &amp; Downloads</title>
+  <!--
+    ESP Web Tools 10.4.0 (Apache-2.0, https://github.com/esphome/esp-web-tools), pinned to an exact version.
+    Every module of dist/web/ is pinned by SHA-384: the entry script by its integrity attribute, the
+    chunks it imports by the import map below (enforced by Chrome/Edge 127+; Web Serial needs Chrome/Edge).
+    To upgrade: npm pack esp-web-tools@<version>, then for each dist/web/*.js
+      openssl dgst -sha384 -binary <file> | base64
+    and replace the version and every hash here.
+  -->
+  <script type="importmap">
+    {
+      "integrity": {
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/esp32c2-CQ3ns5Nm.js": "sha384-AcOQBXWICST0TTlwGYbYA8cElKuXwrwW0L10NSF0YBe1PkndGs5RhsuDzTR/OZhi",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/esp32c3-2tchr35W.js": "sha384-JF+4Kgy21HYqVI0DI+S5SAUyxRrWHKN/yvQ2TzxFzvi3V4IzoyW0WXPscyrzIjwE",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/esp32c5-CeCSizBL.js": "sha384-LWYGviHcz1q8xMq+rBhgcOPSu9V6bB8VO5BMCIeTNIsIUtdzs2FCsTip6Tk37b1f",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/esp32c61-C8HktcOt.js": "sha384-ufZuP5/DSChHLVHLQ7MYes8HllWFxgbwL5y4C5gi9OXhaYHvdF6KEMOpv+iY/JeE",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/esp32c6-DolpfL0e.js": "sha384-IGupIjC1Vbm+EvBSu+rNvcYGQxssjhOw2APdj4cIGAdevBe86rTUYaO21v8RNywO",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/esp32-DNPRK0Ay.js": "sha384-1mT/sUZ9QQrZft8TM1YK7RfyIUggyewqL0w7GrOvQ0aHk1JPIsMsmZeUKcWGWX3G",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/esp32h2-L0n5WuSo.js": "sha384-RU6vJZEaAJLviiv0938vlTobFJZHLEXoIG++VEHufT8z4evp3AeasaMzTemz2DMr",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/esp32p4-MR0ikcda.js": "sha384-xBu/wvVzwGAyBFMKgxeER3FJpFRbEy9ibHOmTdVa/k2B4khQPRq3pfmGZQYRCGpX",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/esp32s2-w9SUkb7o.js": "sha384-NNkQOYG+wsZHOXo+Yam3d6ks8/Bai0cN9MKjMU6U1PaxHjdOJC5ZqhDZcnQ2nL/N",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/esp32s3-DQt_R3ZE.js": "sha384-IcqNvrgnrdlIMX/N8Fb2+T/TGyZHbVAqp8iyoP9cH/E+VSlV6h3Uug3ykbyr1We6",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/index-Dt9w-IG1.js": "sha384-qDnmUz4Vrcy5l9ZV4nrPjsyYSeFTtX4OJNYJEEeZixp894cbdDwh+jeO/d//X/6I",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/install-button.js": "sha384-9XfyvAabgkISlB/Xb3OpshGKpZx0TOt5Mmu78SeiNU3so/p4o2s9m66vy6Utdnom",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/install-dialog-im156JnI.js": "sha384-wMJi9BXikLp2SPdWr7OYNwSRpoiEgrPRT3APdi1KY6iYiMRoYO8vD5vBrBScG5j+",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_32-BLbsWvxO.js": "sha384-NwVOvN4wk0BwWgOx1vGDv+MQEVpiXoaexYjJg/MDYH4rXwzOFpTiPC4Ga+GHl1Z+",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_32c2-wLQhZItC.js": "sha384-kWdvhLR37pGIIpanPvPbGanK2DxuRVrb0Dx4tOYWcL2SpD3OGuC04mKxDgKLF9nT",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_32c3-DmSvHQKL.js": "sha384-CXQHSBDY3+uIPzPcDoj56lAdidofn2R9+kcq6RkXjgVSM/6ZizTnZY4/AJ0tUODp",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_32c5-D1WK4DyB.js": "sha384-3RLmDq3JDolM+Vvwua7Kb5r99y3mw9ptmdAuGKoiXuiQWuSLfAqTtSDO0zryPZm2",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_32c61-DeKkw9vN.js": "sha384-ocwIY7vRGNYbB3pDHtXRXo9e1wPmTmJKEkN+xGCwIDSxrAcMxnqTeyzcfqYmC99I",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_32c6-ZuxjUVr4.js": "sha384-195M9duTV1A72oX1BdPqPyF0KufvSvbkTOXlVLYg0eZSdx6DCcGwL38RSMxvsU3j",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_32h2-CZ4EIL3w.js": "sha384-Whdgv4c66UKEmSqtqwBnxgw56V2kaJd4NQ8gpghwzEuXDotvVxaDzcKQNyacCgNZ",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_32p4-CpHBYEwI.js": "sha384-Ugb2U81Kg2CAS1mQ6avdnzyJ0c7ux8Qmyivx2E7RXmu1bFVZxk8JUENABFAX/YYU",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_32p4rc1-DyGqUAeZ.js": "sha384-obLWbHzQko//5KcdaalAr28oxQcTdbFPIxFr56WrxPPhkCJiDF6mlwnYCtiYHNtz",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_32s2-CrsP1231.js": "sha384-QKrtaJgMb+aG+s5+Kp6hO/mnIOYkYniXOuViJGg5flhCGHb4EEaeASBikr5hnhLp",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_32s3-CiJyd6Fk.js": "sha384-RW8irjkoLiZ6a4u+YbIjMSDqrFlM01oByNK52WD4te9CvRiEh9+631+aOtT9w8uh",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/stub_flasher_8266-CQFcqJ_a.js": "sha384-xPe4ucyto336SN2lbHdv4M0V1RV8+oLpWoYiht75/O/r6N8sOYvIPbGne54oKxla",
+        "https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/styles-sT2V1cOw.js": "sha384-77x+BOw+Zw9kRRNMOF4W5I/luoc5EGHclPXlMwdlEpdWjh2qItAMrOMlzLJzVO9y"
+      }
+    }
+  </script>
+  <script type="module"
+          src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/install-button.js"
+          integrity="sha384-9XfyvAabgkISlB/Xb3OpshGKpZx0TOt5Mmu78SeiNU3so/p4o2s9m66vy6Utdnom"
+          crossorigin="anonymous"></script>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card: #161b22;
+      --border: #30363d;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #1f6feb;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .container { max-width: 860px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    h2 { margin: 0 0 4px; font-size: 20px; }
+    .subtitle { color: var(--muted); margin-bottom: 28px; }
+    a { color: #58a6ff; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-top: 4px solid var(--accent);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+    .device-row {
+      border-top: 1px solid var(--border);
+      padding: 14px 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .device-title { font-weight: 600; font-size: 15px; }
+    .device-sub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+    .btn {
+      display: inline-block;
+      padding: 8px 14px;
+      border-radius: 6px;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+      color: #fff;
+      background: var(--accent);
+      border: none;
+      cursor: pointer;
+    }
+    .btn.secondary { background: #21262d; border: 1px solid var(--border); color: var(--text); }
+    .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    code {
+      background: #010409;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 12px;
+    }
+    .note { font-size: 13px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Faro v0.9.0 — Web Flasher &amp; Downloads</h1>
+    <p class="subtitle">
+      Flash from Chrome or Edge over USB-C (Web Serial), or download the firmware and Ubuntu packages.
+      Faro is an open-source LVGL 9 touch/keyboard UI for upstream <a href="https://github.com/meshcore-dev/MeshCore">MeshCore</a>.
+    </p>
+
+    <div class="card">
+      <h2>Firmware</h2>
+      <p class="device-sub">
+        First install: full image at <code>0x0</code> (erases the device). Updates that keep keys and contacts: the
+        <code>-app.bin</code> image at <code>0x10000</code> with <code>flash_easy.sh</code> or esptool.
+      </p>
+
+      <div class="device-row">
+        <div>
+          <div class="device-title">LilyGo T-Deck Plus (ESP32-S3 + SX1262)</div>
+          <div class="device-sub"><code>faro-tdeck-0.9.0-merged.bin</code></div>
+        </div>
+        <div class="actions">
+          <esp-web-install-button manifest="./manifest-tdeck.json">
+            <button slot="activate" class="btn">Flash via USB</button>
+          </esp-web-install-button>
+          <a class="btn secondary" href="https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.9.0/faro-tdeck-0.9.0-merged.bin">Download .bin</a>
+        </div>
+      </div>
+
+      <div class="device-row">
+        <div>
+          <div class="device-title">LilyGo T-Deck MAX (more contacts, PSRAM)</div>
+          <div class="device-sub"><code>faro-tdeck-max-0.9.0-merged.bin</code></div>
+        </div>
+        <div class="actions">
+          <esp-web-install-button manifest="./manifest-tdeck-max.json">
+            <button slot="activate" class="btn">Flash via USB</button>
+          </esp-web-install-button>
+          <a class="btn secondary" href="https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.9.0/faro-tdeck-max-0.9.0-merged.bin">Download .bin</a>
+        </div>
+      </div>
+
+      <div class="device-row">
+        <div>
+          <div class="device-title">LilyGo T-Beam S3 Supreme</div>
+          <div class="device-sub"><code>faro-tbeam-supreme-0.9.0-merged.bin</code></div>
+        </div>
+        <div class="actions">
+          <esp-web-install-button manifest="./manifest-tbeam-supreme.json">
+            <button slot="activate" class="btn">Flash via USB</button>
+          </esp-web-install-button>
+          <a class="btn secondary" href="https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.9.0/faro-tbeam-supreme-0.9.0-merged.bin">Download .bin</a>
+        </div>
+      </div>
+
+      <div class="device-row">
+        <div>
+          <div class="device-title">Heltec WiFi LoRa 32 V3</div>
+          <div class="device-sub"><code>faro-heltec-v3-0.9.0-merged.bin</code></div>
+        </div>
+        <div class="actions">
+          <esp-web-install-button manifest="./manifest-heltec-v3.json">
+            <button slot="activate" class="btn">Flash via USB</button>
+          </esp-web-install-button>
+          <a class="btn secondary" href="https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.9.0/faro-heltec-v3-0.9.0-merged.bin">Download .bin</a>
+        </div>
+      </div>
+
+      <div class="device-row">
+        <div>
+          <div class="device-title">Elecrow ThinkNode M9</div>
+          <div class="device-sub"><code>faro-thinknode-m9-0.9.0-merged.bin</code></div>
+        </div>
+        <div class="actions">
+          <esp-web-install-button manifest="./manifest-thinknode-m9.json">
+            <button slot="activate" class="btn">Flash via USB</button>
+          </esp-web-install-button>
+          <a class="btn secondary" href="https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.9.0/faro-thinknode-m9-0.9.0-merged.bin">Download .bin</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Ubuntu desktop and bundles</h2>
+      <div class="device-row">
+        <div>
+          <div class="device-title">Faro desktop console and simulator (Ubuntu x86_64)</div>
+          <div class="device-sub">Connects to a MeshCore companion radio over WiFi TCP (:5000) or USB serial</div>
+        </div>
+        <div class="actions">
+          <a class="btn" href="https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.9.0/faro-desktop_0.9.0_amd64.deb">.deb</a>
+          <a class="btn secondary" href="https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.9.0/faro-0.9.0-linux-x86_64.tar.gz">.tar.gz</a>
+        </div>
+      </div>
+      <div class="device-row">
+        <div>
+          <div class="device-title">All firmware images + flash helper</div>
+          <div class="device-sub"><code>faro-0.9.0-firmware.tar.gz</code></div>
+        </div>
+        <div class="actions">
+          <a class="btn secondary" href="https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.9.0/faro-0.9.0-firmware.tar.gz">Download</a>
+          <a class="btn secondary" href="https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.9.0/SHA256SUMS">SHA256SUMS</a>
+        </div>
+      </div>
+      <p class="note">
+        Check downloads with <code>sha256sum -c SHA256SUMS</code>. All files come from the
+        <a href="https://github.com/radek-sixi/sixi-tdeck-plus/releases/tag/v0.9.0">v0.9.0 release</a>, built by CI from the tagged source.
+      </p>
+    </div>
+
+    <p class="note">
+      Faro is Apache-2.0. The firmware includes MeshCore (MIT), LVGL (MIT), Montserrat and Font Awesome glyphs (OFL-1.1),
+      DejaVu-derived fonts (Bitstream Vera) and other open-source libraries, some LGPL-2.1: see
+      <a href="https://github.com/radek-sixi/sixi-tdeck-plus/blob/main/NOTICE">NOTICE</a> and
+      <a href="https://github.com/radek-sixi/sixi-tdeck-plus/blob/main/docs/THIRD_PARTY.md">THIRD_PARTY.md</a>.
+      Offline map tiles are not included; tiles made from OpenStreetMap data need the attribution
+      &copy; OpenStreetMap contributors.
+    </p>
+  </div>
+</body>
+</html>

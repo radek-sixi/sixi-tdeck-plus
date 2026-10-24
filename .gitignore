@@ -1,0 +1,22 @@
+.pio/
+external/lvgl/
+build/
+build-*/
+*.bin
+!RELEASE/*-0.1.0.bin
+!RELEASE/*-0.1.0-merged.bin
+*.elf
+*.uf2
+*.map
+RELEASE/faro-sim*
+RELEASE/faro-console*
+RELEASE/backups/
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/
+.tmp/
+
+# Private / local PlatformIO env files (see envs/faro.ini)
+envs.local/

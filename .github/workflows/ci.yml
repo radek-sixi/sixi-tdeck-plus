@@ -1,0 +1,125 @@
+name: Faro CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FARO_EDITION_MARKERS: ${{ secrets.FARO_EDITION_MARKERS }}   # private marker list (check-edition.py)
+  MESHCORE_URL: https://github.com/meshcore-dev/MeshCore.git
+  PLATFORMIO_VERSION: "6.2.0"
+
+jobs:
+  gates:
+    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    name: Edition and licence gates
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0          # full history, all branches and tags: check-edition scans them
+          submodules: false
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Submodule is the public MeshCore upstream, pinned
+        run: |
+          url="$(git config -f .gitmodules submodule.external/MeshCore.url)"
+          [ "$url" = "$MESHCORE_URL" ] || { echo "::error::external/MeshCore must point to $MESHCORE_URL (is: $url)"; exit 1; }
+          git ls-tree HEAD external/MeshCore | grep -q '^160000 commit ' \
+            || { echo "::error::external/MeshCore has no pinned gitlink"; exit 1; }
+      - name: check-edition self-test
+        run: python3 scripts/check-edition.py --self-test
+      - name: check-edition (tree + full git history)
+        env:
+          FARO_EDITION_MARKERS: ${{ secrets.FARO_EDITION_MARKERS }}
+          FARO_EDITION_EXTRA_MARKERS: ${{ secrets.FARO_EDITION_EXTRA_MARKERS }}
+        run: python3 scripts/check-edition.py .
+      - name: Licence audit
+        run: scripts/license_audit.sh
+
+  host:
+    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    name: Host build and tests (-Wall -Wextra)
+    runs-on: ubuntu-24.04
+    env:
+      SDL_VIDEODRIVER: dummy
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          submodules: true
+      - name: Install SDL2, PNG and build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libsdl2-dev libpng-dev unifdef
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          "-DCMAKE_C_FLAGS=-Wall -Wextra"
+          "-DCMAKE_CXX_FLAGS=-Wall -Wextra"
+      - name: Build
+        run: cmake --build build
+      - name: CTest (unit tests + headless simulator + desktop console)
+        run: ctest --test-dir build --output-on-failure
+      - name: check-edition on the host binaries
+        run: python3 scripts/check-edition.py --no-history build/faro-sim build/faro-console
+
+  firmware:
+    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    name: Firmware ${{ matrix.env }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        env:
+          - faro_tdeck
+          - faro_tdeck_max
+          - faro_heltec_v3
+          - faro_tbeam_supreme
+          - faro_thinknode_m9
+    steps:
+      - uses: actions/checkout@v4.2.2
+        with:
+          submodules: true
+      - name: Submodule is the public MeshCore upstream
+        id: sub
+        run: |
+          url="$(git -C external/MeshCore remote get-url origin)"
+          [ "$url" = "$MESHCORE_URL" ] || { echo "::error::external/MeshCore was cloned from $url"; exit 1; }
+          echo "sha=$(git -C external/MeshCore rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Cache PlatformIO packages and libraries
+        uses: actions/cache@v4.2.3
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+            external/MeshCore/.pio/libdeps
+          key: pio-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-${{ matrix.env }}-${{ steps.sub.outputs.sha }}-${{ hashFiles('envs/*.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-${{ matrix.env }}-
+      - name: Install PlatformIO
+        run: pip install "platformio==${PLATFORMIO_VERSION}"
+      - name: Build ${{ matrix.env }}
+        run: |
+          scripts/link_env.sh
+          pio run -d external/MeshCore -e "${{ matrix.env }}"
+      - name: Licence audit of the linked libraries
+        run: FARO_AUDIT_ENVS="${{ matrix.env }}" scripts/license_audit.sh
+      - name: check-edition on the firmware image
+        run: |
+          B="external/MeshCore/.pio/build/${{ matrix.env }}"
+          python3 scripts/check-edition.py --no-history "$B/firmware.bin" "$B/firmware.elf"

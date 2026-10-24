@@ -1,0 +1,121 @@
+Faro - LVGL handheld UI and desktop companion console for MeshCore
+Copyright 2026 Sixi AI (https://sixi.ai)
+
+Faro is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Faro firmware images and desktop binaries include, or link against, the
+third-party components below. Full licence texts are in the LICENSES/
+directory, which is shipped with every source archive, release bundle and
+.deb package (under /usr/share/doc/faro-desktop/). docs/THIRD_PARTY.md lists
+versions, which binary each component ends up in, and why it is there.
+
+Firmware images (ESP32-S3: T-Deck Plus, T-Deck MAX, Heltec V3, T-Beam S3
+Supreme, ThinkNode M9) and desktop binaries (faro-sim, faro-console):
+
+1. MeshCore (https://github.com/meshcore-dev/MeshCore)
+   Copyright (c) 2025 Scott Powell / rippleradios.com
+   License: MIT                       -> LICENSES/MeshCore-MIT.txt
+
+2. LVGL 9.3 (https://lvgl.io)
+   Copyright (c) 2025 LVGL Kft
+   License: MIT                       -> LICENSES/LVGL-MIT.txt
+   Bundled in LVGL and compiled into Faro:
+   a. Montserrat font (lv_font_montserrat_*)
+      Copyright 2011 The Montserrat Project Authors
+      License: SIL OFL 1.1            -> LICENSES/Montserrat-OFL-1.1.txt
+   b. Font Awesome 5 Free symbol glyphs (LV_SYMBOL_*, inside the Montserrat fonts)
+      Copyright (c) 2022 Fonticons, Inc., Reserved Font Name "Font Awesome"
+      License: SIL OFL 1.1            -> LICENSES/FontAwesome-Free-OFL-1.1.txt
+   c. UNSCII 8 font (lv_font_unscii_8), by Viznut
+      License: public domain
+   d. LodePNG
+      Copyright (c) 2005-2018 Lode Vandevenne
+      License: zlib                   -> LICENSES/LodePNG-Zlib.txt
+   e. QR Code generator library
+      Copyright (c) Project Nayuki
+      License: MIT                    -> LICENSES/QR-Code-generator-MIT.txt
+
+3. DejaVu Fonts 2.37 (DejaVuSans, DejaVuSans-Bold, DejaVuSansMono), rasterised
+   into app/ui/fonts/faro_font_*.c with lv_font_conv
+   Copyright (c) 2003 Bitstream, Inc. (Bitstream Vera)
+   Copyright (c) 2006 Tavmjong Bah (Arev glyphs)
+   DejaVu changes are in the public domain.
+   License: Bitstream Vera / Arev     -> LICENSES/DejaVu-Bitstream-Vera.txt
+
+Firmware images only:
+
+4. ed25519 (MeshCore lib/ed25519, https://github.com/orlp/ed25519)
+   Copyright (c) 2015 Orson Peters
+   License: zlib                      -> LICENSES/ed25519-orlp-Zlib.txt
+
+5. RadioLib (https://github.com/jgromes/RadioLib)
+   Copyright (c) 2018 Jan Gromes
+   License: MIT                       -> LICENSES/RadioLib-MIT.txt
+
+6. Crypto / Arduino Cryptography Library (https://github.com/rweather/arduinolibs)
+   Copyright (c) 2015 Southern Storm Software, Pty Ltd.
+   License: MIT                       -> LICENSES/Crypto-rweather-MIT.txt
+
+7. base64_arduino (https://github.com/Densaugeo/base64_arduino)
+   Copyright (c) 2016 Densaugeo
+   License: MIT                       -> LICENSES/base64-Densaugeo-MIT.txt
+
+8. Adafruit libraries: GFX, ST7735/ST7789, SSD1306, SH110X, BusIO, Unified
+   Sensor, sensor drivers (AHTX0, BME280, BME680, BMP085, BMP280, INA219,
+   INA260, INA3221, MLX90614, SHTC3, VL53L0X) and RTClib
+   Copyright (c) Adafruit Industries
+   Bosch Sensortec BME68x API: Copyright (c) 2021 Bosch Sensortec GmbH
+   STMicroelectronics VL53L0X API: Copyright 2016 STMicroelectronics
+   Licenses: BSD-2-Clause / BSD-3-Clause / MIT / Apache-2.0 (Unified Sensor)
+                                      -> LICENSES/Adafruit.txt
+
+9. Other Arduino libraries: ArduinoJson (MIT, Benoit Blanchon), CayenneLPP
+   (MIT), INA226 (MIT, Rob Tillaart), Melopero RV3028 (MIT), Sensirion Core and
+   Sensirion I2C SHT4x (BSD-3-Clause, Sensirion AG), XPowersLib (MIT, Lewis He;
+   T-Beam S3 Supreme), NonBlockingRTTTL (MIT, Antoine Beauchamp; ThinkNode M9)
+                                      -> LICENSES/Arduino-libraries.txt
+
+10. MicroNMEA (https://github.com/stevemarple/MicroNMEA), Copyright Steve Marple
+    Arduino_LPS22HB (https://github.com/arduino-libraries/Arduino_LPS22HB),
+    Copyright (c) 2019 Arduino SA
+    License: LGPL-2.1                 -> LICENSES/LGPL-2.1.txt
+
+11. arduino-esp32 core 2.0.17 (https://github.com/espressif/arduino-esp32)
+    Copyright (c) Espressif Systems and the Arduino community
+    License: LGPL-2.1-or-later        -> LICENSES/LGPL-2.1.txt
+    It contains the precompiled ESP-IDF 4.4.7 SDK
+    (https://github.com/espressif/esp-idf), Copyright (c) Espressif Systems,
+    License: Apache-2.0 (-> LICENSES/Apache-2.0.txt), which itself bundles
+    components such as FreeRTOS (MIT), lwIP (BSD-3-Clause), mbedTLS
+    (Apache-2.0), Bluedroid (Apache-2.0) and newlib (BSD-style); see the
+    ESP-IDF "Copyrights and Licenses" page for that release.
+
+LGPL components (items 10 and 11): your rights
+    These libraries are statically linked into the firmware images. Under the
+    LGPL you may modify them and relink the firmware with your modified
+    versions. Everything you need for that is public: the complete Faro source
+    (Apache-2.0), the pinned MeshCore submodule commit, and the exact library
+    and platform versions in envs/faro.ini and the MeshCore platformio.ini.
+    Rebuild with `pio run -d external/MeshCore -e <env>` after replacing the
+    library. The source of the LGPL components used by each release is
+    available from the upstream URLs above at the versions listed in
+    docs/THIRD_PARTY.md. For at least three years after each release we will
+    also provide that source on request: open an issue at
+    https://github.com/radek-sixi/sixi-tdeck-plus/issues.
+
+Desktop binaries only (dynamically linked system libraries, not shipped):
+
+12. SDL2 (https://libsdl.org), Copyright (c) Sam Lantinga - License: zlib
+13. libpng (http://www.libpng.org), License: libpng license / PNG Reference
+    Library License version 2; zlib (https://zlib.net), License: zlib
+
+Web flasher (web-flasher/index.html, loaded by the browser, not redistributed):
+
+14. ESP Web Tools 10.4.0 (https://github.com/esphome/esp-web-tools)
+    By the ESPHome maintainers
+    License: Apache-2.0               -> LICENSES/Apache-2.0.txt
+
+Offline map tiles (scripts/make_sd_map.py) are not part of Faro. Tiles made
+from OpenStreetMap data must carry the attribution
+"(c) OpenStreetMap contributors" (data: ODbL 1.0); the tile provider may
+require more. See docs/THIRD_PARTY.md.
