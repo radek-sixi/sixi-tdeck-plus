@@ -71,6 +71,7 @@ void Trackball::poll(int16_t& dx, int16_t& dy, bool& clicked, bool& long_pressed
     }
   }
   _was_pressed = now_pressed;
+  _held_ms = now_pressed ? now_ms - _press_start_ms : 0;
 }
 
 }  // namespace faro::hal

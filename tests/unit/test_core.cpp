@@ -66,7 +66,7 @@ void testRadioConfigValidator() {
   assert(fabsf(def.freq_mhz - 869.618f) < 0.001f);
   assert(fabsf(def.bw_khz - 62.5f) < 0.01f);
   assert(def.sf == 8);
-  assert(def.cr == 5);
+  assert(def.cr == 8);
   assert(def.airtime_factor >= 9.0f);
   assert(RadioConfig::isValid(def));
 

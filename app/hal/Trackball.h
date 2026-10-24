@@ -20,11 +20,14 @@ public:
   void poll(int16_t& dx, int16_t& dy, bool& clicked, bool& long_pressed);
 
   bool isPressedRaw() const;
+  // How long the click has been held at the last poll (0 when released).
+  uint32_t heldMs() const { return _held_ms; }
 
 private:
   uint32_t _press_start_ms = 0;
   bool _was_pressed = false;
   bool _long_fired = false;
+  uint32_t _held_ms = 0;
 };
 
 }  // namespace faro::hal

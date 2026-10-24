@@ -270,6 +270,7 @@ public:
     last_ms = millis();
   }
 
+
 #if !defined(FARO_HEADLESS)
   void wakeDisplay() {
     last_input_ms = millis();
@@ -390,6 +391,8 @@ void UITask::onMessageRecv(mesh::Packet* pkt, const ContactInfo& from, uint8_t t
   if (!_ctrl || !text) return;
 
 
+  // Never log message content (privacy): metadata only
+  Serial.printf("[FARO-RX] DM (%uh, %u B)\n", unsigned(pkt ? pkt->path_len : 0), unsigned(strlen(text)));
   faro::core::MeshEvent ev{};
   ev.type = faro::core::MeshEventType::DirectMessageRecv;
   ev.timestamp = sender_timestamp;

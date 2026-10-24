@@ -130,7 +130,7 @@ void DeviceMeshActions::syncStore() {
     r.freq_mhz = _prefs->freq > 0 ? _prefs->freq : 869.618f;
     r.bw_khz = _prefs->bw > 0 ? _prefs->bw : 62.5f;
     r.sf = _prefs->sf > 0 ? _prefs->sf : 8;
-    r.cr = _prefs->cr > 0 ? _prefs->cr : 5;
+    r.cr = _prefs->cr > 0 ? _prefs->cr : 8;
     r.tx_power_dbm = _prefs->tx_power_dbm != 0 ? _prefs->tx_power_dbm : LORA_TX_POWER;
     r.rx_boosted_gain = (_prefs->rx_boosted_gain != 0);
     r.client_repeat = _prefs->isRepeatEn();

@@ -207,7 +207,7 @@ struct RadioConfig {
   float   freq_mhz = 869.618f;
   float   bw_khz = 62.5f;
   uint8_t sf = 8;
-  uint8_t cr = 5;
+  uint8_t cr = 8;
   int8_t  tx_power_dbm = 22;
   bool    rx_boosted_gain = true;
   bool    client_repeat = false;
@@ -280,7 +280,7 @@ struct RadioPreset {
 
 // Only presets whose whole channel fits 869.400-869.650 MHz.
 inline constexpr RadioPreset kRadioPresets[] = {
-  {"EU/CH Narrow",     869.618f,  62.5f,  8, 5, 22},
+  {"EU/CH Narrow",     869.618f,  62.5f,  8, 8, 22},
   {"EU/CH Default",    869.525f, 250.0f, 11, 5, 22},
   {"EU/CH Long Range", 869.525f, 125.0f, 12, 8, 22},
 };

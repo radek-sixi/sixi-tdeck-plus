@@ -198,6 +198,15 @@ void drawCanvasCircle(uint16_t* buf, int w, int h, int cx, int cy, int r, uint16
     drawCanvasPixel(buf, w, h, x, y, rgb565);
   }
 }
+
+// Alarm texts with a position go only to a private (non-Public, non-hashtag) channel, never in clear on Public.
+const ChannelRecord* firstPrivateChannel(const AppStore& store) {
+  for (size_t ci = 0; ci < AppStore::kMaxChannels; ++ci) {
+    const auto& ch = store.channels()[ci];
+    if (ch.valid && ch.index != 0 && !ch.is_hashtag) return &ch;
+  }
+  return nullptr;
+}
 }  // namespace
 
 void App::tick(uint32_t now_ms) {
@@ -293,7 +302,11 @@ void App::tick(uint32_t now_ms) {
         snprintf(sos_msg, sizeof(sos_msg),
                  "[SOS DEADMAN] %s missed check-in! %s Batt:%u%%",
                  _store.status().node_name, pos, unsigned(_store.status().batt_pct));
-        _actions.sendChannelMessage(0, sos_msg);
+        const ChannelRecord* target = firstPrivateChannel(_store);
+        if (!target || !_actions.sendChannelMessage(target->index, sos_msg)) {
+          strncpy(_store.status().last_cli_reply, "Dead-man: no private channel configured - not sent.",
+                  sizeof(_store.status().last_cli_reply) - 1);
+        }
         _store.bumpVersion();
       }
     }
