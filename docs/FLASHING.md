@@ -1,11 +1,11 @@
 # Flashing Faro
 
-Release files (GitHub release `v0.9.1`):
+Release files (GitHub release `v0.9.2`):
 
 | File | Flash at | Use |
 |---|---|---|
-| `faro-<board>-0.9.1-merged.bin` | `0x0` | First install or recovery: bootloader, partition table, `boot_app0`, app |
-| `faro-<board>-0.9.1-app.bin` | `0x10000` | Update of an existing Faro or MeshCore companion install; keeps identity, contacts, channels |
+| `faro-<board>-0.9.2-merged.bin` | `0x0` | First install or recovery: bootloader, partition table, `boot_app0`, app |
+| `faro-<board>-0.9.2-app.bin` | `0x10000` | Update of an existing Faro or MeshCore companion install; keeps identity, contacts, channels |
 | `SHA256SUMS` | — | Check first: `sha256sum -c SHA256SUMS` |
 
 `<board>` is `tdeck` (T-Deck and T-Deck Plus), `tdeck-max`, `thinknode-m9`, `tbeam-supreme` or `heltec-v3`.
@@ -28,9 +28,9 @@ Switch the device off, connect USB-C, hold the trackball pressed, switch on, rel
 
 ```bash
 # first install
-esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x0 faro-tdeck-0.9.1-merged.bin
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x0 faro-tdeck-0.9.2-merged.bin
 # update, keeps data
-esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x10000 faro-tdeck-0.9.1-app.bin
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x10000 faro-tdeck-0.9.2-app.bin
 ```
 
 On Windows the port is `COMx`, on macOS `/dev/cu.usbmodem*`. If 921600 baud fails, use 460800.

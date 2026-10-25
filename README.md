@@ -8,7 +8,7 @@ companion firmware. It runs on the device next to the normal companion interface
   Faro attaches through upstream's `platformio.local.ini` hook and the `AbstractUITask` listener; it adds no
   companion opcodes.
 - **Licence:** Apache-2.0 (see `LICENSE`, `NOTICE`, `LICENSES/`, `docs/THIRD_PARTY.md`).
-- **Status:** 0.9.1, pre-1.0. Test it on your own hardware before relying on it.
+- **Status:** 0.9.2, pre-1.0. Test it on your own hardware before relying on it.
 
 ## Boards
 
