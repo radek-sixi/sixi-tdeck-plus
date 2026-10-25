@@ -10,6 +10,24 @@ companion firmware. It runs on the device next to the normal companion interface
 - **Licence:** Apache-2.0 (see `LICENSE`, `NOTICE`, `LICENSES/`, `docs/THIRD_PARTY.md`).
 - **Status:** 0.9.2, pre-1.0. Test it on your own hardware before relying on it.
 
+## Screenshots
+
+320×240, rendered with `faro-sim` from the same UI code that runs on the device (made-up contacts and messages).
+
+| Home | Home (dark) | Map | Map (dark) |
+|---|---|---|---|
+| ![Home](docs/screenshots/home.png) | ![Home, dark theme](docs/screenshots/home_dark.png) | ![Map](docs/screenshots/10_map.png) | ![Map, dark theme](docs/screenshots/10_map_dark.png) |
+
+| Chat | Channels | Contact | Trace path |
+|---|---|---|---|
+| ![Chat](docs/screenshots/03_chat_thread.png) | ![Channels](docs/screenshots/04_channels.png) | ![Contact with QR](docs/screenshots/08_contact_detail.png) | ![Trace path](docs/screenshots/09_trace_path.png) |
+
+| Mesh graph | Diagnostics | Mesh tools | Settings |
+|---|---|---|---|
+| ![Mesh graph](docs/screenshots/diag_graph.png) | ![Diagnostics](docs/screenshots/14_diagnostics.png) | ![Mesh tools](docs/screenshots/diag_mesh.png) | ![Settings](docs/screenshots/13_settings.png) |
+
+More in [`docs/screenshots/`](docs/screenshots/).
+
 ## Boards
 
 | Board | Env | Screen UI |
