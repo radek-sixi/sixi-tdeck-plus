@@ -181,6 +181,32 @@ int main(int argc, char** argv) {
     dumpNamed("diag_mesh");
 
 
+    // Radio region page, contact path tab, discover scan answers, trace result
+    app.setSettingsTab(2);
+    app.showScreen(faro::ui::ScreenId::Settings);
+    dumpNamed("settings_radio");
+    app.openContactDetail(1);
+    app.setContactDetailTab(1);
+    app.showScreen(faro::ui::ScreenId::ContactDetail);
+    dumpNamed("contact_path");
+    auto drainBus = [&]() {
+      faro::core::MeshEvent mev{};
+      while (bus.pop(mev)) store.applyEvent(mev, 1000);
+    };
+    actions.scanNearbyNodes();
+    drainBus();
+    app.showScreen(faro::ui::ScreenId::Discover);
+    dumpNamed("discover_scan");
+    uint32_t trace_tag = 0;
+    actions.sendTracePath(store.contacts()[1].pub_key, trace_tag);
+    drainBus();
+    app.showScreen(faro::ui::ScreenId::TracePath);
+    dumpNamed("trace_result");
+    store.uiPrefs().first_boot_done = false;
+    app.showScreen(faro::ui::ScreenId::BootWizard);
+    dumpNamed("welcome_region");
+    store.uiPrefs().first_boot_done = true;
+
     // Also dump Dark Theme previews (Google Material 3 Dark)
     store.uiPrefs().outdoor_high_contrast = false;
     app.showScreen(faro::ui::ScreenId::Home);

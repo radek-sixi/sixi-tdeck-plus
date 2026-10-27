@@ -38,6 +38,12 @@ public:
   void showScreen(ScreenId id);
   ScreenId currentScreen() const { return _current_screen; }
   void setDiagTab(uint8_t tab) { _diag_tab = tab; }
+  // Simulator / tests: open a settings page or a contact tab directly
+  void setSettingsTab(uint8_t tab) {
+    _settings_tab = tab;
+    _settings_hub = false;
+  }
+  void setContactDetailTab(uint8_t tab) { _contact_detail_tab = tab; }
 
   void openChatWithContact(size_t contact_idx);
   void openChannelThread(uint8_t channel_index);
