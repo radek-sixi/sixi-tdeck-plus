@@ -27,9 +27,24 @@ extern "C" unsigned lodepng_decode32(unsigned char** out, unsigned* w, unsigned*
 #include "core/OfflineTileReader.h"
 #include "platform/DeviceMeshActions.h"
 
+// Chat history on flash: not on headless boards (no UI) and not in the Sixi edition (operator data in RAM only)
+#if !defined(FARO_PERSIST_MESSAGES)
+#if   defined(FARO_HEADLESS)
+#define FARO_PERSIST_MESSAGES 0
+#else
+#define FARO_PERSIST_MESSAGES 1
+#endif
+#endif
+
 namespace faro {
 
 namespace {
+// SPIFFS is mounted at /spiffs by upstream main.cpp (same partition as MeshCore's DataStore)
+constexpr const char* kUiStatePath = "/spiffs/faro_ui.bin";
+#if FARO_PERSIST_MESSAGES
+constexpr const char* kMessagesPath = "/spiffs/faro_msgs.bin";
+#endif
+
 
 #if !defined(FARO_HEADLESS)
 class SdTileFs : public core::ITileFileSystem {
@@ -135,6 +150,14 @@ public:
   platform::DeviceMeshActions actions{store, bus};
 
 
+  // Persistence bookkeeping (see persist())
+  uint32_t ui_hash_saved = 0;
+  uint32_t ui_hash_pending = 0;
+  uint32_t msgs_hash_saved = 0;
+  uint32_t last_ui_check_ms = 0;
+  uint32_t last_msg_check_ms = 0;
+  uint32_t last_msg_save_ms = 0;
+
 #if !defined(FARO_HEADLESS)
   FaroDisplay* display = nullptr;
   hal::TouchGT911 touch;
@@ -171,7 +194,22 @@ public:
 
 
     actions.begin(board, static_cast<MultiSerialInterface*>(ifaces), sensors, prefs, &sd);
-    actions.startRadioPolicy(false);  // region from the stored radio settings
+    // UI state (region, preferences, contact tags/notes) and chat history from flash, then the radio
+    // policy of the region
+    const bool ui_loaded = store.loadUiState(kUiStatePath);
+#if FARO_PERSIST_MESSAGES
+    const bool msgs_loaded = store.loadMessages(kMessagesPath);
+#else
+    const bool msgs_loaded = false;
+#endif
+#if !defined(FARO_HEADLESS)
+    if (!ui_loaded) store.uiPrefs().first_boot_done = false;  // welcome screen with the region choice, once
+#endif
+    actions.startRadioPolicy(ui_loaded);
+    ui_hash_saved = ui_loaded ? store.uiStateHash() : 0;
+    msgs_hash_saved = store.messagesHash();
+    Serial.printf("[FARO] UI state %s, %u messages %s\n", ui_loaded ? "loaded" : "new",
+                  unsigned(store.messageCount()), msgs_loaded ? "restored" : "(none)");
 
 #if !defined(FARO_HEADLESS)
     display = static_cast<FaroDisplay*>(disp);
@@ -335,6 +373,34 @@ public:
   }
 #endif
 
+  // Writes the UI state shortly after it stops changing and the chat history at most once a minute
+  void persist(uint32_t now) {
+    if (now - last_ui_check_ms >= 2000) {
+      last_ui_check_ms = now;
+      const uint32_t h = store.uiStateHash();
+      if (h != ui_hash_saved) {
+        if (h == ui_hash_pending) {
+          const uint32_t t = millis();
+          if (store.saveUiState(kUiStatePath)) ui_hash_saved = h;
+          if (millis() - t > 50) Serial.printf("[FARO] UI state saved in %u ms\n", unsigned(millis() - t));
+        }
+        ui_hash_pending = h;
+      }
+    }
+#if FARO_PERSIST_MESSAGES
+    if (now - last_msg_check_ms >= 15000) {
+      last_msg_check_ms = now;
+      const uint32_t h = store.messagesHash();
+      if (h != msgs_hash_saved && (last_msg_save_ms == 0 || now - last_msg_save_ms >= 60000)) {
+        const uint32_t t = millis();
+        if (store.saveMessages(kMessagesPath)) msgs_hash_saved = h;
+        last_msg_save_ms = now ? now : 1;
+        Serial.printf("[FARO] %u messages saved in %u ms\n", unsigned(store.messageCount()), unsigned(millis() - t));
+      }
+    }
+#endif
+  }
+
   void loop() {
     uint32_t t0 = millis();
 #if !defined(FARO_HEADLESS)
@@ -363,6 +429,7 @@ public:
     for (uint32_t resend_id = 0; store.takeResendRequest(resend_id);) {
       actions.resendDirectMessage(resend_id);
     }
+    persist(t0);
     buzzer.loop(t0);
 
 #if !defined(FARO_HEADLESS)

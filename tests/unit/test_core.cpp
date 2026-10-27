@@ -601,6 +601,94 @@ void testRemoteResponses() {
   printf("[PASS] testRemoteResponses\n");
 }
 
+void testPersistence() {
+  const char* ui_path = "/tmp/faro_test_ui.bin";
+  const char* msg_path = "/tmp/faro_test_msgs.bin";
+  remove(ui_path);
+  remove(msg_path);
+
+  AppStore a;
+  ContactRecord c{};
+  c.pub_key[0] = 0x55;
+  strncpy(c.name, "Alice", sizeof(c.name) - 1);
+  c.valid = true;
+  a.upsertContact(c);
+  ContactRecord* ac = a.findContactByPubKeyMutable(c.pub_key);
+  ac->favourite = true;
+  ac->tag_mask = 0x05;
+  strncpy(ac->notes, "meet at the hut", sizeof(ac->notes) - 1);
+  a.uiPrefs().language = Language::DE;
+  a.uiPrefs().outdoor_high_contrast = false;
+  a.uiPrefs().screen_timeout_secs = 300;
+  a.uiPrefs().deadman_mode = 2;
+  a.uiPrefs().deadman_triggered = true;
+  a.setRegion(RadioRegionId::US915);
+  a.channelsMutable()[0].muted = true;
+  const uint32_t h1 = a.uiStateHash();
+  assert(a.saveUiState(ui_path));
+
+  MessageRecord out{};
+  out.outgoing = true;
+  memcpy(out.peer_prefix, c.pub_key, 6);
+  strncpy(out.text, "hello", sizeof(out.text) - 1);
+  out.delivery_state = DeliveryState::SentDirect;
+  a.appendMessage(out);
+  MessageRecord in{};
+  in.is_channel = true;
+  in.channel_index = 0;
+  strncpy(in.sender_name, "Bob", sizeof(in.sender_name) - 1);
+  strncpy(in.text, "grüezi", sizeof(in.text) - 1);
+  in.delivery_state = DeliveryState::DeliveredAck;
+  a.appendMessage(in);
+  assert(a.saveMessages(msg_path));
+
+  // A fresh store with the same contact (MeshCore loads it) gets everything back
+  AppStore b;
+  b.upsertContact(c);
+  assert(b.loadUiState(ui_path));
+  assert(b.uiPrefs().language == Language::DE && !b.uiPrefs().outdoor_high_contrast);
+  assert(b.uiPrefs().screen_timeout_secs == 300 && b.uiPrefs().deadman_mode == 2);
+  assert(!b.uiPrefs().deadman_triggered);  // a restart never fires the dead-man SOS
+  assert(b.region() == RadioRegionId::US915);
+  const ContactRecord* bc = b.findContactByPubKey(c.pub_key);
+  assert(bc && bc->favourite && bc->tag_mask == 0x05 && strcmp(bc->notes, "meet at the hut") == 0);
+  assert(b.findChannel(0)->muted);
+  assert(b.uiStateHash() == h1);
+  assert(b.loadMessages(msg_path));
+  assert(b.messageCount() == 2);
+  assert(strcmp(b.messageAt(0).text, "hello") == 0 && b.messageAt(0).outgoing);
+  assert(b.messageAt(0).delivery_state == DeliveryState::Failed);  // no ACK can come after a restart
+  assert(strcmp(b.messageAt(1).text, "grüezi") == 0 && strcmp(b.messageAt(1).sender_name, "Bob") == 0);
+  assert(b.messagesHash() != AppStore{}.messagesHash());
+  const uint32_t next_id = b.appendMessage(in);
+  assert(next_id > b.messageAt(1).id);
+
+  // Contacts that are gone are not recreated; a changed preference changes the hash
+  AppStore empty;
+  assert(empty.loadUiState(ui_path) && empty.contactCount() == 0);
+  b.uiPrefs().kid_mode = true;
+  assert(b.uiStateHash() != h1);
+
+  // Wrong file: refused, store unchanged
+  FILE* f = fopen(ui_path, "wb");
+  fputs("garbage", f);
+  fclose(f);
+  AppStore g;
+  assert(!g.loadUiState(ui_path) && g.uiPrefs().language == Language::EN);
+  assert(!g.loadMessages("/tmp/faro_test_missing.bin"));
+  b.clearMessages();
+  assert(b.messageCount() == 0);
+
+  // Desktop console: both parts in one file
+  assert(a.saveToFile(ui_path));
+  AppStore d;
+  d.upsertContact(c);
+  assert(d.loadFromFile(ui_path) && d.messageCount() == 2);
+  remove(ui_path);
+  remove(msg_path);
+  printf("[PASS] testPersistence\n");
+}
+
 void testTrackRecording() {
   AppStore s;
   assert(!s.recordTrackPoint(46.0, 8.0, 500.0f, 1));  // not recording
@@ -622,6 +710,7 @@ int main() {
   testRadioRegions();
   testPathEncodingAndTrace();
   testRemoteResponses();
+  testPersistence();
   testTrackRecording();
   testAppStoreMessagingAndRetries();
   testQrUriRoundTrip();

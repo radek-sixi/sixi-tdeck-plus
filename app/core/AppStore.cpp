@@ -1176,109 +1176,354 @@ void AppStore::applyRemoteResponse(RemoteRequestKind kind, const uint8_t pub_key
   ++_version;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Persistence: explicit little-endian fields (struct layouts can change between releases)
+// ---------------------------------------------------------------------------------------------
 namespace {
-struct PersistedContactMeta {
-  uint8_t pub_key[32];
-  uint8_t tag_mask;
-  bool    favourite;
-  bool    muted;
-  char    notes[64];
+constexpr uint32_t kUiMagic = 0x31495546U;    // "FUI1"
+constexpr uint32_t kMsgMagic = 0x31534D46U;   // "FMS1"
+constexpr uint32_t kComboMagic = 0x34524146U; // "FAR4"
+constexpr uint16_t kUiVersion = 1;
+constexpr uint16_t kMsgVersion = 1;
+
+// Writes to a file, or only hashes (FNV-1a) when no file is given
+struct Out {
+  FILE* f = nullptr;
+  uint32_t hash = 0x811C9DC5U;
+  bool ok = true;
+  void bytes(const void* p, size_t n) {
+    const uint8_t* b = static_cast<const uint8_t*>(p);
+    if (f) {
+      if (n && fwrite(b, 1, n, f) != n) ok = false;
+    } else {
+      for (size_t i = 0; i < n; ++i) {
+        hash ^= b[i];
+        hash *= 0x01000193U;
+      }
+    }
+  }
+  void u8(uint8_t v) { bytes(&v, 1); }
+  void u16(uint16_t v) { const uint8_t b[2] = {uint8_t(v), uint8_t(v >> 8)}; bytes(b, 2); }
+  void u32(uint32_t v) {
+    const uint8_t b[4] = {uint8_t(v), uint8_t(v >> 8), uint8_t(v >> 16), uint8_t(v >> 24)};
+    bytes(b, 4);
+  }
+  void str(const char* s, size_t cap) {
+    size_t n = s ? strnlen(s, cap) : 0;
+    if (n > 255) n = 255;
+    u8(uint8_t(n));
+    bytes(s, n);
+  }
 };
-constexpr uint32_t kStoreMagic = 0x46415233U;  // "FAR3"
+
+struct In {
+  FILE* f = nullptr;
+  bool ok = true;
+  void bytes(void* p, size_t n) {
+    if (!ok || (n && fread(p, 1, n, f) != n)) {
+      ok = false;
+      memset(p, 0, n);
+    }
+  }
+  uint8_t u8() { uint8_t v = 0; bytes(&v, 1); return v; }
+  uint16_t u16() { uint8_t b[2]; bytes(b, 2); return uint16_t(b[0] | (b[1] << 8)); }
+  uint32_t u32() {
+    uint8_t b[4];
+    bytes(b, 4);
+    return uint32_t(b[0]) | (uint32_t(b[1]) << 8) | (uint32_t(b[2]) << 16) | (uint32_t(b[3]) << 24);
+  }
+  void str(char* out, size_t cap) {
+    const size_t n = u8();
+    char tmp[256];
+    bytes(tmp, n);
+    const size_t k = n < cap ? n : cap - 1;
+    memcpy(out, tmp, k);
+    out[k] = '\0';
+  }
+};
+
+bool contactHasMeta(const ContactRecord& c) {
+  return c.valid && (c.tag_mask != 0 || c.favourite || c.muted || c.notes[0] != '\0');
+}
+
+// Writes <path>.tmp and renames it over <path> (SPIFFS cannot rename over an existing file)
+template <typename Fn>
+bool writeAtomically(const char* path, Fn&& body) {
+  if (!path || !path[0]) return false;
+  char tmp[96];
+  if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= int(sizeof(tmp))) return false;
+  FILE* fp = fopen(tmp, "wb");
+  if (!fp) return false;
+  Out o;
+  o.f = fp;
+  body(o);
+  const bool ok = o.ok && fflush(fp) == 0;
+  fclose(fp);
+  if (!ok) {
+    remove(tmp);
+    return false;
+  }
+  remove(path);
+  return rename(tmp, path) == 0;
+}
+
+// Opens <path>, or the temp file a power cut left behind
+FILE* openForRead(const char* path) {
+  if (!path || !path[0]) return nullptr;
+  if (FILE* fp = fopen(path, "rb")) return fp;
+  char tmp[96];
+  if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= int(sizeof(tmp))) return nullptr;
+  return fopen(tmp, "rb");
+}
 }  // namespace
 
-bool AppStore::saveToFile(const char* filepath) const {
-  if (!filepath || !filepath[0]) return false;
-  FILE* fp = fopen(filepath, "wb");
+// Defined as members-in-disguise: they need the private fields
+struct AppStoreCodec {
+  static void writeUi(const AppStore& s, Out& o) {
+    const UiPrefs& up = s._ui_prefs;
+    o.u32(kUiMagic);
+    o.u16(kUiVersion);
+    o.u8(uint8_t(s._region));
+    o.u8(uint8_t(up.language));
+    o.u8(up.outdoor_high_contrast);
+    o.u8(up.brightness_pct);
+    o.u8(up.kb_backlight);
+    o.u16(up.screen_timeout_secs);
+    o.u8(up.repeat_roam);
+    o.u8(up.first_boot_done);
+    o.u8(up.show_timestamps);
+    o.u8(up.kid_mode);
+    o.u8(up.mention_only_filter);
+    o.u8(up.coord_format);
+    o.u8(up.bot_mode);
+    o.u8(up.store_and_forward);
+    o.u8(up.deadman_mode);
+    for (int i = 0; i < 3; ++i) o.str(up.custom_tags[i], sizeof(up.custom_tags[i]));
+    o.str(up.away_msg, sizeof(up.away_msg));
+
+    uint8_t n_mute = 0;
+    for (size_t i = 0; i < AppStore::kMaxChannels; ++i) {
+      if (s._channels[i].valid && s._channels[i].muted) ++n_mute;
+    }
+    o.u8(n_mute);
+    for (size_t i = 0; i < AppStore::kMaxChannels; ++i) {
+      if (s._channels[i].valid && s._channels[i].muted) o.u8(s._channels[i].index);
+    }
+
+    uint16_t n_meta = 0;
+    for (size_t i = 0; i < AppStore::kMaxContacts; ++i) {
+      if (contactHasMeta(s._contacts[i])) ++n_meta;
+    }
+    o.u16(n_meta);
+    for (size_t i = 0; i < AppStore::kMaxContacts; ++i) {
+      const ContactRecord& c = s._contacts[i];
+      if (!contactHasMeta(c)) continue;
+      o.bytes(c.pub_key, 32);
+      o.u8(c.tag_mask);
+      o.u8(c.favourite);
+      o.u8(c.muted);
+      o.str(c.notes, sizeof(c.notes));
+    }
+  }
+
+  static bool readUi(AppStore& s, In& in) {
+    if (in.u32() != kUiMagic || in.u16() != kUiVersion || !in.ok) return false;
+    UiPrefs up = s._ui_prefs;
+    const uint8_t region = in.u8();
+    const uint8_t lang = in.u8();
+    up.language = Language(lang <= uint8_t(Language::FR) ? lang : 0);
+    up.outdoor_high_contrast = in.u8() != 0;
+    up.brightness_pct = in.u8();
+    up.kb_backlight = in.u8();
+    up.screen_timeout_secs = in.u16();
+    up.repeat_roam = in.u8() != 0;
+    up.first_boot_done = in.u8() != 0;
+    up.show_timestamps = in.u8() != 0;
+    up.kid_mode = in.u8() != 0;
+    up.mention_only_filter = in.u8() != 0;
+    up.coord_format = uint8_t(in.u8() % 3);
+    up.bot_mode = uint8_t(in.u8() % 3);
+    up.store_and_forward = in.u8() != 0;
+    up.deadman_mode = uint8_t(in.u8() % 4);
+    for (int i = 0; i < 3; ++i) in.str(up.custom_tags[i], sizeof(up.custom_tags[i]));
+    in.str(up.away_msg, sizeof(up.away_msg));
+    if (!in.ok) return false;
+    // The dead-man countdown restarts at boot; a restart never fires an SOS by itself
+    static constexpr uint32_t kDeadmanSecs[4] = {1800, 900, 1800, 3600};
+    up.deadman_remaining_secs = kDeadmanSecs[up.deadman_mode];
+    up.deadman_triggered = false;
+    up.search_active = false;
+    s._ui_prefs = up;
+    if (RegionPolicy::isKnown(region)) s.setRegion(RadioRegionId(region));
+
+    const uint8_t n_mute = in.u8();
+    for (uint8_t k = 0; k < n_mute && in.ok; ++k) {
+      const uint8_t idx = in.u8();
+      for (size_t i = 0; i < AppStore::kMaxChannels; ++i) {
+        if (s._channels[i].valid && s._channels[i].index == idx) s._channels[i].muted = true;
+      }
+    }
+    const uint16_t n_meta = in.u16();
+    for (uint16_t k = 0; k < n_meta && in.ok; ++k) {
+      uint8_t pub[32];
+      in.bytes(pub, 32);
+      const uint8_t tags = in.u8();
+      const bool fav = in.u8() != 0;
+      const bool muted = in.u8() != 0;
+      char notes[64];
+      in.str(notes, sizeof(notes));
+      if (!in.ok) break;
+      // Contacts that no longer exist in MeshCore are dropped, never recreated
+      if (ContactRecord* c = s.findContactByPubKeyMutable(pub)) {
+        c->tag_mask = tags;
+        c->favourite = fav;
+        c->muted = muted;
+        memcpy(c->notes, notes, sizeof(c->notes));
+      }
+    }
+    ++s._version;
+    return true;
+  }
+
+  static void writeMessages(const AppStore& s, Out& o) {
+    o.u32(kMsgMagic);
+    o.u16(kMsgVersion);
+    o.u32(s._next_msg_id);
+    o.u16(uint16_t(s._msg_count));
+    for (size_t i = 0; i < s._msg_count; ++i) {
+      const MessageRecord& m = s.messageAt(i);
+      o.u32(m.id);
+      o.u8(uint8_t((m.is_channel ? 1 : 0) | (m.outgoing ? 2 : 0)));
+      o.u8(m.channel_index);
+      o.bytes(m.peer_prefix, 6);
+      o.u32(m.timestamp);
+      o.u32(m.ack_crc);
+      o.u8(uint8_t(m.delivery_state));
+      o.u8(m.retry_count);
+      o.u8(m.hops);
+      o.u8(m.repeats_heard);
+      o.u8(uint8_t(m.snr_q4));
+      o.u16(uint16_t(m.rssi));
+      o.str(m.sender_name, sizeof(m.sender_name));
+      o.str(m.text, sizeof(m.text));
+    }
+  }
+
+  static bool readMessages(AppStore& s, In& in) {
+    if (in.u32() != kMsgMagic || in.u16() != kMsgVersion || !in.ok) return false;
+    const uint32_t next_id = in.u32();
+    const uint16_t count = in.u16();
+    if (!in.ok) return false;
+    s.clearMessages();
+    for (uint16_t k = 0; k < count && in.ok; ++k) {
+      MessageRecord m{};
+      m.id = in.u32();
+      const uint8_t flags = in.u8();
+      m.is_channel = (flags & 1) != 0;
+      m.outgoing = (flags & 2) != 0;
+      m.channel_index = in.u8();
+      in.bytes(m.peer_prefix, 6);
+      m.timestamp = in.u32();
+      m.ack_crc = in.u32();
+      const uint8_t st = in.u8();
+      m.delivery_state = st <= uint8_t(DeliveryState::Failed) ? DeliveryState(st) : DeliveryState::Failed;
+      m.retry_count = in.u8();
+      m.hops = in.u8();
+      m.repeats_heard = in.u8();
+      m.snr_q4 = int8_t(in.u8());
+      m.rssi = int16_t(in.u16());
+      in.str(m.sender_name, sizeof(m.sender_name));
+      in.str(m.text, sizeof(m.text));
+      if (!in.ok) break;
+      // An ACK cannot arrive for a send from before the restart: such messages count as not delivered
+      if (m.outgoing && (m.delivery_state == DeliveryState::Queued || m.delivery_state == DeliveryState::SentDirect ||
+                         m.delivery_state == DeliveryState::SentFlood)) {
+        m.delivery_state = DeliveryState::Failed;
+      }
+      m.valid = true;
+      // Keep the stored id: unread / bot bookkeeping refers to it
+      s._messages[s._msg_head] = m;
+      s._msg_head = (s._msg_head + 1) % AppStore::kMaxMessages;
+      if (s._msg_count < AppStore::kMaxMessages) ++s._msg_count;
+      if (m.id >= s._next_msg_id) s._next_msg_id = m.id + 1;
+    }
+    if (next_id > s._next_msg_id) s._next_msg_id = next_id;
+    ++s._version;
+    return true;
+  }
+};
+
+bool AppStore::saveUiState(const char* filepath) const {
+  return writeAtomically(filepath, [this](Out& o) { AppStoreCodec::writeUi(*this, o); });
+}
+
+bool AppStore::loadUiState(const char* filepath) {
+  FILE* fp = openForRead(filepath);
   if (!fp) return false;
+  In in;
+  in.f = fp;
+  const bool ok = AppStoreCodec::readUi(*this, in);
+  fclose(fp);
+  return ok;
+}
 
-  uint32_t magic = kStoreMagic;
-  fwrite(&magic, sizeof(magic), 1, fp);
-  fwrite(&_ui_prefs, sizeof(_ui_prefs), 1, fp);
-  fwrite(_regions, sizeof(_regions), 1, fp);
-  fwrite(&_gps_track, sizeof(_gps_track), 1, fp);
+bool AppStore::saveMessages(const char* filepath) const {
+  return writeAtomically(filepath, [this](Out& o) { AppStoreCodec::writeMessages(*this, o); });
+}
 
-  uint32_t msg_cnt = uint32_t(_msg_count);
-  fwrite(&msg_cnt, sizeof(msg_cnt), 1, fp);
+bool AppStore::loadMessages(const char* filepath) {
+  FILE* fp = openForRead(filepath);
+  if (!fp) return false;
+  In in;
+  in.f = fp;
+  const bool ok = AppStoreCodec::readMessages(*this, in);
+  fclose(fp);
+  return ok;
+}
+
+void AppStore::clearMessages() {
+  for (size_t i = 0; i < kMaxMessages; ++i) _messages[i] = MessageRecord{};
+  _msg_head = 0;
+  _msg_count = 0;
+  _resend_count = 0;
+  ++_version;
+}
+
+uint32_t AppStore::uiStateHash() const {
+  Out o;
+  AppStoreCodec::writeUi(*this, o);
+  return o.hash;
+}
+
+uint32_t AppStore::messagesHash() const {
+  Out o;
+  o.u32(_next_msg_id);
+  o.u32(uint32_t(_msg_count));
   for (size_t i = 0; i < _msg_count; ++i) {
     const MessageRecord& m = messageAt(i);
-    fwrite(&m, sizeof(MessageRecord), 1, fp);
+    o.u32(m.id);
+    o.u8(uint8_t(m.delivery_state));
   }
+  return o.hash;
+}
 
-  uint32_t meta_cnt = uint32_t(contactCount());
-  fwrite(&meta_cnt, sizeof(meta_cnt), 1, fp);
-  for (size_t i = 0; i < kMaxContacts; ++i) {
-    if (!_contacts[i].valid) continue;
-    PersistedContactMeta pcm{};
-    memcpy(pcm.pub_key, _contacts[i].pub_key, 32);
-    pcm.tag_mask = _contacts[i].tag_mask;
-    pcm.favourite = _contacts[i].favourite;
-    pcm.muted = _contacts[i].muted;
-    memcpy(pcm.notes, _contacts[i].notes, sizeof(pcm.notes));
-    fwrite(&pcm, sizeof(pcm), 1, fp);
-  }
-  fclose(fp);
-  return true;
+bool AppStore::saveToFile(const char* filepath) const {
+  return writeAtomically(filepath, [this](Out& o) {
+    o.u32(kComboMagic);
+    AppStoreCodec::writeUi(*this, o);
+    AppStoreCodec::writeMessages(*this, o);
+  });
 }
 
 bool AppStore::loadFromFile(const char* filepath) {
-  if (!filepath || !filepath[0]) return false;
-  FILE* fp = fopen(filepath, "rb");
+  FILE* fp = openForRead(filepath);
   if (!fp) return false;
-
-  uint32_t magic = 0;
-  if (fread(&magic, sizeof(magic), 1, fp) != 1 || magic != kStoreMagic) {
-    fclose(fp);
-    return false;
-  }
-
-  UiPrefs loaded_prefs{};
-  if (fread(&loaded_prefs, sizeof(loaded_prefs), 1, fp) == 1) {
-    _ui_prefs = loaded_prefs;
-    _ui_prefs.search_active = false;
-  }
-  (void)fread(_regions, sizeof(_regions), 1, fp);
-  (void)fread(&_gps_track, sizeof(_gps_track), 1, fp);
-
-  uint32_t msg_cnt = 0;
-  if (fread(&msg_cnt, sizeof(msg_cnt), 1, fp) == 1 && msg_cnt <= kMaxMessages) {
-    _msg_head = 0;
-    _msg_count = 0;
-    for (uint32_t i = 0; i < msg_cnt; ++i) {
-      MessageRecord m{};
-      if (fread(&m, sizeof(m), 1, fp) == 1 && m.valid) {
-        appendMessage(m);
-      }
-    }
-  }
-
-  uint32_t meta_cnt = 0;
-  if (fread(&meta_cnt, sizeof(meta_cnt), 1, fp) == 1 && meta_cnt <= kMaxContacts) {
-    for (uint32_t i = 0; i < meta_cnt; ++i) {
-      PersistedContactMeta pcm{};
-      if (fread(&pcm, sizeof(pcm), 1, fp) != 1) break;
-      if (ContactRecord* c = findContactByPubKeyMutable(pcm.pub_key)) {
-        c->tag_mask = pcm.tag_mask;
-        c->favourite = pcm.favourite;
-        c->muted = pcm.muted;
-        memcpy(c->notes, pcm.notes, sizeof(c->notes));
-      } else {
-        ContactRecord placeholder{};
-        memcpy(placeholder.pub_key, pcm.pub_key, 32);
-        snprintf(placeholder.name, sizeof(placeholder.name), "Node-%02X%02X", pcm.pub_key[0], pcm.pub_key[1]);
-        placeholder.tag_mask = pcm.tag_mask;
-        placeholder.favourite = pcm.favourite;
-        placeholder.muted = pcm.muted;
-        memcpy(placeholder.notes, pcm.notes, sizeof(placeholder.notes));
-        placeholder.valid = true;
-        upsertContact(placeholder);
-      }
-    }
-  }
-
+  In in;
+  in.f = fp;
+  bool ok = in.u32() == kComboMagic && AppStoreCodec::readUi(*this, in);
+  if (ok) ok = AppStoreCodec::readMessages(*this, in);
   fclose(fp);
-  ++_version;
-  return true;
+  return ok;
 }
 
 }  // namespace faro::core

@@ -992,7 +992,7 @@ bool DeviceMeshActions::runCliCommand(const char* cmd, char* out_reply, size_t m
   } else if (strcmp(cmd, "help") == 0) {
     snprintf(reply, sizeof(reply),
              "> Commands: ver, get name, set name <x>, get region, set region <eu868|eu433|us915|anz915|br915>, "
-             "set prv.key <hex>, export settings, import settings, clock, reboot");
+             "clear history, set prv.key <hex>, export settings, import settings, clock, reboot");
     handled = true;
   } else if (strcmp(cmd, "get region") == 0) {
     snprintf(reply, sizeof(reply), "> %s (%s)", _store.regionInfo().code, _store.regionInfo().name);
@@ -1008,6 +1008,10 @@ bool DeviceMeshActions::runCliCommand(const char* cmd, char* out_reply, size_t m
     } else {
       snprintf(reply, sizeof(reply), "> Error: unknown or locked region");
     }
+    handled = true;
+  } else if (strcmp(cmd, "clear history") == 0) {
+    _store.clearMessages();
+    snprintf(reply, sizeof(reply), "> Message history cleared (also on flash)");
     handled = true;
   } else if (strncmp(cmd, "set name ", 9) == 0) {
     if (setNodeName(cmd + 9)) {

@@ -167,7 +167,18 @@ public:
   bool exportContactsJson(const char* filepath, char* out_saved_path = nullptr, size_t max_len = 0);
 
 
-  // Persistent store save/load (messages, contact tags/notes/favourites, regions, UI prefs)
+  // Persistence. UI state = UI preferences, radio region, contact tags/notes/favourites/mutes, channel
+  // mutes. Messages = the chat history. Files are written to <path>.tmp first, then renamed.
+  bool saveUiState(const char* filepath) const;
+  bool loadUiState(const char* filepath);
+  bool saveMessages(const char* filepath) const;
+  bool loadMessages(const char* filepath);
+  void clearMessages();
+  // Cheap fingerprints to decide when the files need writing
+  uint32_t uiStateHash() const;
+  uint32_t messagesHash() const;
+
+  // Both parts in one file (desktop console)
   bool saveToFile(const char* filepath) const;
   bool loadFromFile(const char* filepath);
 
@@ -196,6 +207,7 @@ public:
   static bool hexToBytes(const char* hex, uint8_t* out_bytes, size_t expected_len);
 
 private:
+  friend struct AppStoreCodec;  // persistence (AppStore.cpp)
   uint32_t _version = 1;
   ContactRecord _contacts[kMaxContacts] = {};
   ChannelRecord _channels[kMaxChannels] = {};
