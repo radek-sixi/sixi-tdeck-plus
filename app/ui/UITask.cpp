@@ -12,6 +12,7 @@ extern "C" unsigned lodepng_decode32(unsigned char** out, unsigned* w, unsigned*
 #include "FaroDisplay.h"
 #include "TouchGT911.h"
 #include "KeyboardBBQ10.h"
+#include "KeypadM9.h"
 #include "Trackball.h"
 #include "ui/App.h"
 #endif
@@ -139,6 +140,11 @@ public:
   hal::TouchGT911 touch;
   hal::KeyboardBBQ10 keyboard;
   hal::Trackball trackball;
+#if defined(THINKNODE_M9)
+  hal::KeypadM9 m9_keys;
+  uint32_t m9_lv_key = 0;
+  bool m9_lv_pressed = false;
+#endif
   SdTileFs tile_fs{sd};
   core::OfflineTileReader tiles{&tile_fs};
   ui::App app{store, actions, tiles};
@@ -257,6 +263,49 @@ public:
       data->key = 0;
       data->state = LV_INDEV_STATE_RELEASED;
     });
+
+#if defined(THINKNODE_M9)
+    // ThinkNode M9: the keypad is the only input (no touch, no trackball). Page keys move the focus,
+    // enter clicks (or sends while typing), home/back return to Home, menu opens Settings.
+    m9_keys.begin();
+    lv_indev_t* indev_m9 = lv_indev_create();
+    lv_indev_set_type(indev_m9, LV_INDEV_TYPE_KEYPAD);
+    lv_indev_set_user_data(indev_m9, this);
+    if (app.inputGroup()) {
+      lv_indev_set_group(indev_m9, app.inputGroup());
+    }
+    lv_indev_set_read_cb(indev_m9, [](lv_indev_t* indev, lv_indev_data_t* data) {
+      auto* self = static_cast<DeviceController*>(lv_indev_get_user_data(indev));
+      if (!self) return;
+      data->key = self->m9_lv_key;
+      data->state = LV_INDEV_STATE_RELEASED;
+      if (self->m9_lv_pressed) {  // one read pressed, the next one released
+        self->m9_lv_pressed = false;
+        return;
+      }
+      const uint8_t k = self->m9_keys.readKey(millis());
+      if (k == 0) return;
+      self->wakeDisplay();
+      uint32_t lv_key = 0;
+      switch (k) {
+        case 0x81: lv_key = LV_KEY_PREV; break;
+        case 0x85: lv_key = LV_KEY_NEXT; break;
+        case 0x0D:
+          if (self->app.isTyping()) self->app.onKeyPress('\r');
+          else lv_key = LV_KEY_ENTER;
+          break;
+        case 0x82: case 0x86: case 0x1B: self->app.onKeyPress(27); break;
+        case 0x83: self->app.openSettings(); break;
+        default: self->app.onKeyPress(k); break;
+      }
+      if (lv_key) {
+        self->m9_lv_key = lv_key;
+        self->m9_lv_pressed = true;
+        data->key = lv_key;
+        data->state = LV_INDEV_STATE_PRESSED;
+      }
+    });
+#endif
     last_input_ms = millis();
     if (sd.isMounted() && sd.hasDiscoveredTiles()) {
       bool tile_ok = tiles.hasTile(sd.defaultTileZ(), sd.defaultTileX(), sd.defaultTileY());

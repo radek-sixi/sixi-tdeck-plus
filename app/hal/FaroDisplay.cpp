@@ -9,7 +9,9 @@ ColorVal UIColor::window_bkg = 0;
 struct FaroDisplay::Impl {};
 FaroDisplay::FaroDisplay() : DisplayDriver(0, 0), _impl(nullptr) {}
 FaroDisplay::~FaroDisplay() {}
-bool FaroDisplay::begin() { return true; }
+// No screen: upstream main.cpp then uses the fixed BLE PIN (BLE_PIN_CODE) instead of a random one
+// that nobody could read
+bool FaroDisplay::begin() { return false; }
 void FaroDisplay::setBacklight(uint8_t percent) { _backlight_pct = percent; }
 void FaroDisplay::turnOn() { _on = true; }
 void FaroDisplay::turnOff() { _on = false; }

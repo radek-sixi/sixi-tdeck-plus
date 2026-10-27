@@ -45,6 +45,12 @@ public:
 
   // Keyboard & shortcut handler (for BBQ10 physical keyboard and simulator hotkeys)
   void onKeyPress(uint8_t key);
+  // True while a text field is on screen (keys go into it)
+  bool isTyping() const { return _compose_ta != nullptr; }
+  void openSettings() {
+    _settings_hub = true;
+    showScreen(ScreenId::Settings);
+  }
 
   lv_group_t* inputGroup() const { return _input_group; }
 
