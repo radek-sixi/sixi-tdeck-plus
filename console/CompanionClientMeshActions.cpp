@@ -298,6 +298,10 @@ void CompanionClientMeshActions::handleIncomingFrame(const uint8_t* data, size_t
         _store.radio().bw_khz = float(readU32LE(&data[52])) / 1000.0f;
         _store.radio().sf = data[56];
         _store.radio().cr = data[57];
+        RadioRegionId found = _store.region();
+        if (RegionPolicy::findRegionFor(_store.radio().freq_mhz, _store.radio().bw_khz, _store.region(), found)) {
+          _store.setRegion(found);
+        }
         size_t name_len = len - 58;
         if (name_len >= sizeof(_store.status().node_name)) {
           name_len = sizeof(_store.status().node_name) - 1;
@@ -728,8 +732,8 @@ bool CompanionClientMeshActions::requestTelemetry(const uint8_t target_pubkey[32
 }
 
 bool CompanionClientMeshActions::setRadioConfig(const RadioConfig& in) {
-  const RadioConfig cfg = RadioConfig::sanitized(in);
-  if (!RadioConfig::isValid(cfg)) return false;
+  const RadioConfig cfg = RadioConfig::sanitized(in, _store.regionInfo());
+  if (!RadioConfig::isValid(cfg, _store.regionInfo())) return false;
   _store.radio() = cfg;
   uint8_t pkt[12];
   pkt[0] = CMD_SET_RADIO_PARAMS;
@@ -786,10 +790,24 @@ bool CompanionClientMeshActions::setBlePin(uint32_t pin) {
 }
 
 bool CompanionClientMeshActions::setRepeatEnabled(bool enabled) {
-  if (enabled && !RadioConfig::isAllowedRepeatFrequency(_store.radio().freq_mhz)) {
+  if (enabled && !RadioConfig::isAllowedRepeatFrequency(_store.radio().freq_mhz, _store.regionInfo())) {
     return false;
   }
-  _store.radio().client_repeat = enabled;
+  RadioConfig cfg = _store.radio();
+  cfg.client_repeat = enabled;
+  return setRadioConfig(cfg);
+}
+
+bool CompanionClientMeshActions::setRegion(RadioRegionId id) {
+  const RadioRegionId before = _store.region();
+  if (!_store.setRegion(id)) return false;
+  uint8_t hash_bytes = 0;
+  const RadioConfig cfg = RadioConfig::regionDefault(_store.regionInfo(), _store.radio(), hash_bytes);
+  if (!setRadioConfig(cfg)) {
+    _store.setRegion(before);
+    return false;
+  }
+  if (hash_bytes != 0) setPathHashMode(hash_bytes);
   return true;
 }
 
@@ -944,7 +962,7 @@ bool CompanionClientMeshActions::setTuningParams(float rx_delay, uint8_t interfe
   pkt[0] = CMD_SET_TUNING_PARAMS;
   writeU32LE(&pkt[1], uint32_t(rx_delay * 1000.0f));
   float af = _store.radio().airtime_factor;
-  if (!(af >= RadioBandPolicy::kMinAirtimeFactor)) af = RadioBandPolicy::kMinAirtimeFactor;  // <= 10 % duty
+  if (!(af >= _store.regionInfo().min_airtime_factor)) af = _store.regionInfo().min_airtime_factor;  // region duty
   writeU32LE(&pkt[5], uint32_t(af * 1000.0f));
   _store.bumpVersion();
   return sendFrame(pkt, sizeof(pkt));

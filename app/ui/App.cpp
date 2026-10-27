@@ -110,6 +110,19 @@ lv_obj_t* createHeaderRow(lv_obj_t* parent, const char* title, bool outdoor,
   return hdr;
 }
 
+// Next TX power step at or below the region's ceiling (wraps to the lowest)
+int8_t nextTxPower(int8_t cur, int8_t cap) {
+  static const int8_t kSteps[] = {2, 5, 9, 12, 14, 17, 20, 22};
+  for (int8_t s : kSteps) {
+    if (s > cur && s <= cap) return s;
+  }
+  if (cur < cap) return cap;
+  for (int8_t s : kSteps) {
+    if (s <= cap) return s;
+  }
+  return cap;
+}
+
 }  // namespace
 
 App::App(AppStore& store, IMeshActions& actions, OfflineTileReader& tile_reader)
@@ -659,12 +672,15 @@ void App::updateStatusBar() {
   const auto& rr = _store.repeatRoam();
 
   const auto& up = _store.uiPrefs();
+  // Region, then the strongest repeater heard lately (shown only: MeshCore routes as always)
   char left_buf[96] = {0};
-  snprintf(left_buf, sizeof(left_buf), "%.10s%s%s | R:%.7s",
+  snprintf(left_buf, sizeof(left_buf), "%.8s%s%s|%.9s|%s%.6s",
            st.node_name,
            up.bot_mode == 1 ? "[PING]" : (up.bot_mode == 2 ? "[AWAY]" : ""),
            up.deadman_mode ? "[DM]" : "",
-           rr.hasPreferred() ? rr.preferredName() : "Auto");
+           _store.regionInfo().code,
+           rr.hasPreferred() ? "R:" : "",
+           rr.hasPreferred() ? rr.preferredName() : "");
   lv_label_set_text(_top_left_lbl, left_buf);
 
   char right_buf[96] = {0};
@@ -3518,7 +3534,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
     return;
   }
 
-  // SUBPAGE 2: Dedicated LoRa Radio Presets & Live Frequency/BW/SF/CR/TX Controls
+  // SUBPAGE 2: Radio region, community presets & live Frequency/BW/SF/CR/TX controls (inside the region rules)
   if (_settings_tab == 2) {
     lv_obj_t* rcard = lv_obj_create(parent);
     lv_obj_set_size(rcard, 308, 170);
@@ -3526,34 +3542,34 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(rcard, 6, 0);
     lv_obj_remove_flag(rcard, LV_OBJ_FLAG_SCROLLABLE);
 
+    const RadioRegion& reg = _store.regionInfo();
     // Match active preset name or "Custom"
     const char* active_preset_name = "Custom";
-    for (size_t pi = 0; pi < kNumRadioPresets; ++pi) {
-      const auto& pr = kRadioPresets[pi];
-      if (fabsf(r.freq_mhz - pr.freq_mhz) < 0.005f &&
-          fabsf(r.bw_khz - pr.bw_khz) < 0.5f &&
-          r.sf == pr.sf && r.cr == pr.cr) {
-        active_preset_name = pr.name;
-        _preset_idx = pi;
-        break;
-      }
+    const int pi = RegionPolicy::findPreset(reg, r.freq_mhz, r.bw_khz, r.sf, r.cr);
+    if (pi >= 0) {
+      active_preset_name = reg.presets[pi].name;
+      _preset_idx = size_t(pi);
+    } else if (_preset_idx >= reg.preset_count) {
+      _preset_idx = 0;
     }
 
     lv_obj_t* rl = lv_label_create(rcard);
     lv_obj_set_pos(rl, 0, 0);
+    lv_obj_set_width(rl, 294);
+    lv_label_set_long_mode(rl, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_font(rl, &faro_font_mono_12, 0);
     lv_obj_set_style_text_color(rl, p.accent, 0);
-    lv_label_set_text_fmt(rl, "%.3f BW%.1f SF%u %ddBm ERP%.0f duty%.0f%%",
+    lv_label_set_text_fmt(rl, "%.3f BW%.1f SF%u %ddBm %s%.0f duty%.0f%%",
                           double(r.freq_mhz), double(r.bw_khz), unsigned(r.sf), int(r.tx_power_dbm),
-                          double(RadioBandPolicy::erpDbm(r.tx_power_dbm)),
-                          double(RadioBandPolicy::dutyCyclePercent(r.airtime_factor)));
+                          RegionPolicy::powerRefLabel(reg), double(RegionPolicy::radiatedDbm(reg, r.tx_power_dbm)),
+                          double(RegionPolicy::dutyCyclePercent(r.airtime_factor)));
     if (_store.status().radio_notice[0]) {
       lv_label_set_text(rl, _store.status().radio_notice);
       lv_obj_set_style_text_color(rl, p.danger, 0);
     }
 
     struct RadCtx { App* app; int act; };
-    static RadCtx s_rctx[12];
+    static RadCtx s_rctx[13];
     auto bindRadBtn = [&](lv_obj_t* btn, int idx, int x, int y, int w, int h,
                           lv_color_t bg, lv_color_t fg, const char* text) {
       lv_obj_set_size(btn, w, h);
@@ -3565,50 +3581,82 @@ void App::buildSettingsView(lv_obj_t* parent) {
         if (!ctx || !ctx->app) return;
         App* a = ctx->app;
         RadioConfig cfg = a->_store.radio();
+        const RadioRegion& rg = a->_store.regionInfo();
         int act = ctx->act;
+        uint8_t preset_hash = 0;
 
-        if (act == 0 || act == 1 || act == 2) {
+        if (act == 12) {
+          // [Region]: changes the frequency, so it needs a second tap within 5 s
+          const RadioRegionId next = RegionPolicy::next(a->_store.region());
+          const uint32_t now = lv_tick_get();
+          if (a->_armed_action != 1200 || now - a->_armed_ms > 5000U) {
+            a->_armed_action = 1200;
+            a->_armed_ms = now;
+            snprintf(a->_store.status().radio_notice, sizeof(a->_store.status().radio_notice),
+                     "Tap Region again: %s", RegionPolicy::get(next).name);
+            a->renderBody();
+            return;
+          }
+          a->_armed_action = -1;
+          if (!a->_actions.setRegion(next)) {
+            snprintf(a->_store.status().radio_notice, sizeof(a->_store.status().radio_notice),
+                     "Region not changed");
+          }
+          a->_preset_idx = 0;
+          a->updateStatusBar();
+          a->renderBody();
+          return;
+        } else if (act == 0 || act == 1 || act == 2) {
           // Preset <, Preset cycle, Preset >
           if (act == 0) {
-            a->_preset_idx = (a->_preset_idx + kNumRadioPresets - 1) % kNumRadioPresets;
+            a->_preset_idx = (a->_preset_idx + rg.preset_count - 1) % rg.preset_count;
           } else {
-            a->_preset_idx = (a->_preset_idx + 1) % kNumRadioPresets;
+            a->_preset_idx = (a->_preset_idx + 1) % rg.preset_count;
           }
-          const auto& pr = kRadioPresets[a->_preset_idx];
+          const auto& pr = rg.presets[a->_preset_idx];
           cfg.freq_mhz = pr.freq_mhz;
           cfg.bw_khz = pr.bw_khz;
           cfg.sf = pr.sf;
           cfg.cr = pr.cr;
-          cfg.tx_power_dbm = pr.tx_power_dbm;
+          cfg.client_repeat = cfg.client_repeat && RegionPolicy::isRepeatFrequency(rg, pr.freq_mhz);
+          preset_hash = pr.path_hash_bytes;
         } else if (act == 3 || act == 5) {
-          // [Freq -/+]: 25 kHz steps; the whole channel must stay inside 869.400-869.650 MHz
+          // [Freq -/+]: 25 kHz steps; the whole channel must stay inside the region's band
           float next_f = cfg.freq_mhz + (act == 5 ? 0.025f : -0.025f);
-          if (!RadioBandPolicy::channelInBand(next_f, cfg.bw_khz)) return;
+          if (!RegionPolicy::channelInRegion(rg, next_f, cfg.bw_khz)) return;
           cfg.freq_mhz = next_f;
+          cfg.client_repeat = cfg.client_repeat && RegionPolicy::isRepeatFrequency(rg, next_f);
         } else if (act == 4) {
-          // [Freq]: cycle the standard in-band MeshCore frequencies that fit the current bandwidth
-          static const float kFreqs[3] = {869.525f, 869.618f, 869.495f};
-          int cur_k = -1;
-          for (int k = 0; k < 3; ++k) {
-            if (fabsf(cfg.freq_mhz - kFreqs[k]) < 0.002f) cur_k = k;
+          // [Freq]: cycle the region's preset frequencies that fit the current bandwidth
+          float freqs[12];
+          size_t nf = 0;
+          for (uint8_t k = 0; k < rg.preset_count && nf < 12; ++k) {
+            bool dup = false;
+            for (size_t j = 0; j < nf; ++j) dup = dup || fabsf(freqs[j] - rg.presets[k].freq_mhz) < 0.002f;
+            if (!dup) freqs[nf++] = rg.presets[k].freq_mhz;
           }
-          for (int step = 1; step <= 3; ++step) {
-            float f = kFreqs[(cur_k + step + 3) % 3];
-            if (RadioBandPolicy::channelInBand(f, cfg.bw_khz)) {
+          int cur_k = -1;
+          for (size_t k = 0; k < nf; ++k) {
+            if (fabsf(cfg.freq_mhz - freqs[k]) < 0.002f) cur_k = int(k);
+          }
+          for (size_t step = 1; step <= nf; ++step) {
+            float f = freqs[(size_t(cur_k + int(nf)) + step) % nf];
+            if (RegionPolicy::channelInRegion(rg, f, cfg.bw_khz)) {
               cfg.freq_mhz = f;
               break;
             }
           }
+          cfg.client_repeat = cfg.client_repeat && RegionPolicy::isRepeatFrequency(rg, cfg.freq_mhz);
         } else if (act == 6) {
           // [BW]: next supported bandwidth that still fits the band at this frequency
-          static const float kBws[5] = {62.5f, 125.0f, 250.0f, 31.25f, 41.7f};
+          static const float kBws[6] = {62.5f, 125.0f, 250.0f, 500.0f, 31.25f, 41.7f};
           int cur_k = -1;
-          for (int k = 0; k < 5; ++k) {
+          for (int k = 0; k < 6; ++k) {
             if (fabsf(cfg.bw_khz - kBws[k]) < 0.5f) cur_k = k;
           }
-          for (int step = 1; step <= 5; ++step) {
-            float bw = kBws[(cur_k + step + 5) % 5];
-            if (RadioConfig::isValidSx1262Bandwidth(bw) && RadioBandPolicy::channelInBand(cfg.freq_mhz, bw)) {
+          for (int step = 1; step <= 6; ++step) {
+            float bw = kBws[(cur_k + step + 6) % 6];
+            if (RadioConfig::isValidSx1262Bandwidth(bw) && RegionPolicy::channelInRegion(rg, cfg.freq_mhz, bw)) {
               cfg.bw_khz = bw;
               break;
             }
@@ -3620,17 +3668,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
           // [CR]: cycle 5..8
           cfg.cr = (cfg.cr >= 8 || cfg.cr < 5) ? 5 : uint8_t(cfg.cr + 1);
         } else if (act == 9) {
-          // [TX Power]: cycle 10, 14, 17, 20, 22 dBm, capped by the e.r.p. limit
-          static const int8_t kPwrs[5] = {10, 14, 17, 20, 22};
-          int next_k = 4;
-          for (int k = 0; k < 5; ++k) {
-            if (cfg.tx_power_dbm <= kPwrs[k]) {
-              next_k = (k + 1) % 5;
-              break;
-            }
-          }
-          cfg.tx_power_dbm = kPwrs[next_k];
-          if (cfg.tx_power_dbm > RadioBandPolicy::maxConductedDbm()) cfg.tx_power_dbm = kPwrs[0];
+          // [TX Power]: next step, capped by the region's e.r.p./e.i.r.p. limit
+          cfg.tx_power_dbm = nextTxPower(cfg.tx_power_dbm, RegionPolicy::maxConductedDbm(rg));
         } else if (act == 10) {
           // [RPT]: toggle client repeat
           a->_actions.setRepeatEnabled(!cfg.client_repeat);
@@ -3642,7 +3681,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
           cfg.rx_boosted_gain = !cfg.rx_boosted_gain;
         }
 
-        a->_actions.setRadioConfig(cfg);
+        if (a->_actions.setRadioConfig(cfg) && preset_hash != 0) a->_actions.setPathHashMode(preset_hash);
         a->updateStatusBar();
         a->renderBody();
       }, LV_EVENT_CLICKED, &s_rctx[idx]);
@@ -3653,14 +3692,16 @@ void App::buildSettingsView(lv_obj_t* parent) {
       lv_obj_center(l);
     };
 
-    // Row 1 (y=20): [< Preset] [Preset Name] [Preset >]
-    char pr_lbl[40];
+    // Row 1 (y=20): [Region] [<] [Preset Name] [>]
+    char rg_lbl[24], pr_lbl[40];
+    snprintf(rg_lbl, sizeof(rg_lbl), "%s", reg.code);
     snprintf(pr_lbl, sizeof(pr_lbl), "%s", active_preset_name);
-    bindRadBtn(lv_button_create(rcard), 0, 0,   20, 64,  32, p.surface_alt, p.text_primary, "< Preset");
-    bindRadBtn(lv_button_create(rcard), 1, 68,  20, 158, 32, p.accent, lv_color_hex(0xFFFFFF), pr_lbl);
-    bindRadBtn(lv_button_create(rcard), 2, 230, 20, 64,  32, p.surface_alt, p.text_primary, "Preset >");
+    bindRadBtn(lv_button_create(rcard), 12, 0,   20, 90,  32, p.warning, lv_color_hex(0xFFFFFF), rg_lbl);
+    bindRadBtn(lv_button_create(rcard), 0,  94,  20, 34,  32, p.surface_alt, p.text_primary, "<");
+    bindRadBtn(lv_button_create(rcard), 1,  132, 20, 124, 32, p.accent, lv_color_hex(0xFFFFFF), pr_lbl);
+    bindRadBtn(lv_button_create(rcard), 2,  260, 20, 34,  32, p.surface_alt, p.text_primary, ">");
 
-    // Row 2 (y=56): [Freq -] [Pasmo MHz] [Freq +]
+    // Row 2 (y=56): [Freq -] [MHz] [Freq +]
     char fq_lbl[32];
     snprintf(fq_lbl, sizeof(fq_lbl), "%.3f MHz", double(r.freq_mhz));
     bindRadBtn(lv_button_create(rcard), 3, 0,   56, 68,  32, p.surface_alt, p.text_primary, "Freq -");
@@ -4798,18 +4839,36 @@ void App::buildBootWizardView(lv_obj_t* parent) {
   lv_obj_set_width(info, 292);
   lv_obj_set_style_text_font(info, &faro_font_12, 0);
   lv_obj_set_style_text_color(info, p.text_primary, 0);
+  const RadioRegion& reg = _store.regionInfo();
   lv_label_set_text_fmt(info,
                         "1. %s: %s (%s)\n"
                         "2. Node: %s\n"
-                        "3. Radio: %.3f MHz BW%.1f SF%u (change in Settings)\n"
-                        "4. Repeat-Roam & BLE+WiFi Companion: Enabled",
+                        "3. Region: %s\n"
+                        "    %.3f MHz BW%.1f SF%u, max %d dBm",
                         tr(StrId::LanguageLabel, lang), languageName(lang), languageCode(lang),
-                        _store.status().node_name, double(_store.radio().freq_mhz),
-                        double(_store.radio().bw_khz), unsigned(_store.radio().sf));
+                        _store.status().node_name, reg.name, double(_store.radio().freq_mhz),
+                        double(_store.radio().bw_khz), unsigned(_store.radio().sf),
+                        int(RegionPolicy::maxConductedDbm(reg)));
+
+  // Region: applied at once (frequency, power ceiling, duty cycle of the region)
+  lv_obj_t* reg_btn = lv_button_create(card);
+  lv_obj_set_size(reg_btn, 140, 38);
+  lv_obj_set_pos(reg_btn, 0, 80);
+  Theme::styleTouchButton(reg_btn, p.warning, lv_color_hex(0xFFFFFF));
+  lv_obj_add_event_cb(reg_btn, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    self->_actions.setRegion(RegionPolicy::next(self->_store.region()));
+    self->updateStatusBar();
+    self->renderBody();
+  }, LV_EVENT_CLICKED, this);
+  lv_obj_t* rl = lv_label_create(reg_btn);
+  lv_obj_set_style_text_font(rl, &faro_font_14, 0);
+  lv_label_set_text_fmt(rl, "%s >", reg.code);
+  lv_obj_center(rl);
 
   lv_obj_t* done_btn = lv_button_create(card);
-  lv_obj_set_size(done_btn, 292, 38);
-  lv_obj_set_pos(done_btn, 0, 80);
+  lv_obj_set_size(done_btn, 146, 38);
+  lv_obj_set_pos(done_btn, 146, 80);
   Theme::styleTouchButton(done_btn, p.success, lv_color_hex(0xFFFFFF));
   lv_obj_add_event_cb(done_btn, [](lv_event_t* e) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));

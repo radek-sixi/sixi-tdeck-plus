@@ -866,6 +866,15 @@ bool AppStore::exportContactsJson(const char* filepath, char* out_saved_path, si
 }
 
 
+bool AppStore::setRegion(RadioRegionId id) {
+  if (!RegionPolicy::isKnown(uint8_t(id))) return false;
+  if (_region != id) {
+    _region = id;
+    ++_version;
+  }
+  return true;
+}
+
 namespace {
 struct PersistedContactMeta {
   uint8_t pub_key[32];

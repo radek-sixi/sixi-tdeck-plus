@@ -363,13 +363,23 @@ bool VirtualMeshActions::requestTelemetry(const uint8_t target_pubkey[32]) {
 }
 
 bool VirtualMeshActions::setRadioConfig(const RadioConfig& cfg) {
-  RadioConfig applied = cfg;
-  if (applied.client_repeat && !RadioConfig::isAllowedRepeatFrequency(applied.freq_mhz)) {
-    applied.client_repeat = false;
-  }
-  if (!RadioConfig::isValid(applied)) return false;
+  const RadioConfig applied = RadioConfig::sanitized(cfg, _store.regionInfo());
+  if (!RadioConfig::isValid(applied, _store.regionInfo())) return false;
   _store.radio() = applied;
   _store.bumpVersion();
+  return true;
+}
+
+bool VirtualMeshActions::setRegion(core::RadioRegionId id) {
+  const core::RadioRegionId before = _store.region();
+  if (!_store.setRegion(id)) return false;
+  uint8_t hash_bytes = 0;
+  const RadioConfig cfg = RadioConfig::regionDefault(_store.regionInfo(), _store.radio(), hash_bytes);
+  if (!setRadioConfig(cfg)) {
+    _store.setRegion(before);
+    return false;
+  }
+  if (hash_bytes != 0) setPathHashMode(hash_bytes);
   return true;
 }
 
@@ -407,9 +417,9 @@ bool VirtualMeshActions::setBlePin(uint32_t pin) {
 }
 
 bool VirtualMeshActions::setRepeatEnabled(bool enabled) {
-  _store.radio().client_repeat = enabled;
-  _store.bumpVersion();
-  return true;
+  RadioConfig cfg = _store.radio();
+  cfg.client_repeat = enabled;
+  return setRadioConfig(cfg);
 }
 
 bool VirtualMeshActions::setDefaultScope(const char* scope_name) {

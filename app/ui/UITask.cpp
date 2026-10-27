@@ -171,6 +171,7 @@ public:
 
 
     actions.begin(board, static_cast<MultiSerialInterface*>(ifaces), sensors, prefs, &sd);
+    actions.startRadioPolicy(false);  // region from the stored radio settings
 
 #if !defined(FARO_HEADLESS)
     display = static_cast<FaroDisplay*>(disp);

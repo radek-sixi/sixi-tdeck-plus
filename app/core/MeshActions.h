@@ -134,6 +134,9 @@ public:
   virtual bool importSettingsFromSd() {
     return false;
   }
+
+  // Radio region: applies the region's first preset, power ceiling and duty cycle (Sixi: EU 868 only)
+  virtual bool setRegion(RadioRegionId id) { (void)id; return false; }
 };
 
 }  // namespace faro::core

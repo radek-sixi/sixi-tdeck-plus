@@ -112,6 +112,11 @@ public:
   RadioConfig& radio() { return _radio; }
   const RadioConfig& radio() const { return _radio; }
 
+  // Radio region (sets the allowed sub-bands, power and duty limits). The Sixi edition stays on EU 868.
+  RadioRegionId region() const { return _region; }
+  const RadioRegion& regionInfo() const { return RegionPolicy::get(_region); }
+  bool setRegion(RadioRegionId id);
+
   SystemStatus& status() { return _status; }
   const SystemStatus& status() const { return _status; }
 
@@ -195,6 +200,7 @@ private:
   TraceResult       _last_trace;
   GpsFix            _gps;
   RadioConfig       _radio;
+  RadioRegionId     _region = RadioRegionId::EU868;
   SystemStatus      _status;
   UiPrefs           _ui_prefs;
   RegionRecord      _regions[kMaxRegions] = {};

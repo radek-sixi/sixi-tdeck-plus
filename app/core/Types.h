@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
+#include "RadioRegions.h"
 
 namespace faro::core {
 
@@ -165,33 +166,26 @@ struct GpsFix {
   uint32_t last_fix_ts = 0;
 };
 
-// Radio limits enforced in every edition (OFCOM RIR1008-09 / CEPT ERC/REC 70-03 band h1.4).
-// Faro only offers the 869.400-869.650 MHz sub-band used by the MeshCore EU/CH presets:
-//   - the whole channel (centre +/- BW/2) must lie inside the band;
-//   - max 27 dBm e.r.p. (500 mW); e.r.p. = conducted + antenna gain - 2.15 dB;
-//   - max 10 % duty cycle; MeshCore enforces duty = 1 / (1 + airtime_factor), so af >= 9.
-#ifndef FARO_ANTENNA_GAIN_DBI
-#define FARO_ANTENNA_GAIN_DBI 3.0f
-#endif
+// Radio limits enforced in every edition: the selected region (RadioRegions.h) sets the allowed
+// sub-bands (whole channel = centre +/- BW/2), the e.r.p./e.i.r.p. ceiling and the duty cycle
+// (MeshCore: duty = 1 / (1 + airtime_factor)). Without an explicit region the EU 868 rules apply
+// (869.400-869.650 MHz, 27 dBm e.r.p., 10 %).
 
+// The EU 868 band, kept for callers that predate regions.
 struct RadioBandPolicy {
   static constexpr float kBandLowMhz       = 869.400f;
   static constexpr float kBandHighMhz      = 869.650f;
   static constexpr float kMaxErpDbm        = 27.0f;
   static constexpr float kMinAirtimeFactor = 9.0f;   // 10 % duty cycle
-  static constexpr int8_t kRadioMaxDbm     = 22;     // SX1262 / LR1110 PA limit
-  static constexpr int8_t kRadioMinDbm     = -9;
+  static constexpr int8_t kRadioMaxDbm     = RegionPolicy::kRadioMaxDbm;
+  static constexpr int8_t kRadioMinDbm     = RegionPolicy::kRadioMinDbm;
 
   static bool channelInBand(float freq_mhz, float bw_khz) {
-    const float half = bw_khz / 2000.0f;
-    return (freq_mhz - half) >= kBandLowMhz - 0.0005f &&
-           (freq_mhz + half) <= kBandHighMhz + 0.0005f;
+    return RegionPolicy::channelInRegion(RegionPolicy::get(RadioRegionId::EU868), freq_mhz, bw_khz);
   }
 
   static int8_t maxConductedDbm(float antenna_gain_dbi = FARO_ANTENNA_GAIN_DBI) {
-    float lim = kMaxErpDbm + 2.15f - antenna_gain_dbi;
-    if (lim > kRadioMaxDbm) lim = kRadioMaxDbm;
-    return int8_t(floorf(lim));
+    return RegionPolicy::maxConductedDbm(RegionPolicy::get(RadioRegionId::EU868), antenna_gain_dbi);
   }
 
   static float erpDbm(int8_t conducted_dbm, float antenna_gain_dbi = FARO_ANTENNA_GAIN_DBI) {
@@ -199,7 +193,7 @@ struct RadioBandPolicy {
   }
 
   static float dutyCyclePercent(float airtime_factor) {
-    return 100.0f / (1.0f + airtime_factor);
+    return RegionPolicy::dutyCyclePercent(airtime_factor);
   }
 };
 
@@ -230,61 +224,55 @@ struct RadioConfig {
   }
 
   // Centre frequency must leave room for at least the narrowest bandwidth.
-  static bool isValidFrequencyBand(float f) {
-    return RadioBandPolicy::channelInBand(f, 7.8f);
+  static bool isValidFrequencyBand(float f, const RadioRegion& region = RegionPolicy::get(RadioRegionId::EU868)) {
+    return RegionPolicy::channelInRegion(region, f, 7.8f);
   }
 
-  // Allowed client-repeat frequencies (upstream isValidClientRepeatFreq, in-band ones only)
-  static bool isAllowedRepeatFrequency(float f) {
-    static constexpr float kRepeatFreqs[] = {869.495f, 869.525f, 869.618f};
-    for (float rf : kRepeatFreqs) {
-      if (fabsf(f - rf) <= 0.005f) return true;
-    }
-    return false;
+  static bool isAllowedRepeatFrequency(float f, const RadioRegion& region = RegionPolicy::get(RadioRegionId::EU868)) {
+    return RegionPolicy::isRepeatFrequency(region, f);
   }
 
-  static bool isValid(const RadioConfig& cfg) {
+  static bool isValid(const RadioConfig& cfg, const RadioRegion& region = RegionPolicy::get(RadioRegionId::EU868)) {
     if (!isValidSx1262Bandwidth(cfg.bw_khz)) return false;
     if (cfg.sf < 5 || cfg.sf > 12) return false;
     if (cfg.cr < 5 || cfg.cr > 8) return false;
-    if (!RadioBandPolicy::channelInBand(cfg.freq_mhz, cfg.bw_khz)) return false;
-    if (cfg.tx_power_dbm < RadioBandPolicy::kRadioMinDbm ||
-        cfg.tx_power_dbm > RadioBandPolicy::maxConductedDbm()) return false;
-    if (cfg.airtime_factor < RadioBandPolicy::kMinAirtimeFactor) return false;
-    if (cfg.client_repeat && !isAllowedRepeatFrequency(cfg.freq_mhz)) return false;
+    if (!RegionPolicy::channelInRegion(region, cfg.freq_mhz, cfg.bw_khz)) return false;
+    if (cfg.tx_power_dbm < RegionPolicy::kRadioMinDbm ||
+        cfg.tx_power_dbm > RegionPolicy::maxConductedDbm(region)) return false;
+    if (!(cfg.airtime_factor >= region.min_airtime_factor)) return false;
+    if (cfg.client_repeat && !isAllowedRepeatFrequency(cfg.freq_mhz, region)) return false;
     return true;
   }
 
-  // Clamp what can be clamped (power, duty); band/BW/SF/CR are still checked by isValid().
-  static RadioConfig sanitized(const RadioConfig& in) {
+  // Clamp what can be clamped (power, duty, repeat); band/BW/SF/CR are still checked by isValid().
+  static RadioConfig sanitized(const RadioConfig& in,
+                               const RadioRegion& region = RegionPolicy::get(RadioRegionId::EU868)) {
     RadioConfig out = in;
-    const int8_t max_dbm = RadioBandPolicy::maxConductedDbm();
+    const int8_t max_dbm = RegionPolicy::maxConductedDbm(region);
     if (out.tx_power_dbm > max_dbm) out.tx_power_dbm = max_dbm;
-    if (out.tx_power_dbm < RadioBandPolicy::kRadioMinDbm) out.tx_power_dbm = RadioBandPolicy::kRadioMinDbm;
-    if (!(out.airtime_factor >= RadioBandPolicy::kMinAirtimeFactor)) {
-      out.airtime_factor = RadioBandPolicy::kMinAirtimeFactor;
-    }
-    if (out.client_repeat && !isAllowedRepeatFrequency(out.freq_mhz)) out.client_repeat = false;
+    if (out.tx_power_dbm < RegionPolicy::kRadioMinDbm) out.tx_power_dbm = RegionPolicy::kRadioMinDbm;
+    if (!(out.airtime_factor >= region.min_airtime_factor)) out.airtime_factor = region.min_airtime_factor;
+    if (out.airtime_factor > RegionPolicy::kMaxAirtimeFactor) out.airtime_factor = RegionPolicy::kMaxAirtimeFactor;
+    if (out.client_repeat && !isAllowedRepeatFrequency(out.freq_mhz, region)) out.client_repeat = false;
+    return out;
+  }
+
+  // Settings to apply when the user picks a region: its first preset, the highest allowed power and the
+  // region's default duty cycle. `path_hash_bytes` gets the preset's path hash size (0 = keep).
+  static RadioConfig regionDefault(const RadioRegion& region, const RadioConfig& current, uint8_t& path_hash_bytes) {
+    RadioConfig out = current;
+    const RegionPreset& p = region.presets[0];
+    out.freq_mhz = p.freq_mhz;
+    out.bw_khz = p.bw_khz;
+    out.sf = p.sf;
+    out.cr = p.cr;
+    out.tx_power_dbm = RegionPolicy::maxConductedDbm(region);
+    out.airtime_factor = region.default_airtime_factor;
+    out.client_repeat = false;
+    path_hash_bytes = p.path_hash_bytes;
     return out;
   }
 };
-
-struct RadioPreset {
-  const char* name;
-  float       freq_mhz;
-  float       bw_khz;
-  uint8_t     sf;
-  uint8_t     cr;
-  int8_t      tx_power_dbm;
-};
-
-// Only presets whose whole channel fits 869.400-869.650 MHz.
-inline constexpr RadioPreset kRadioPresets[] = {
-  {"EU/CH Narrow",     869.618f,  62.5f,  8, 8, 22},
-  {"EU/CH Default",    869.525f, 250.0f, 11, 5, 22},
-  {"EU/CH Long Range", 869.525f, 125.0f, 12, 8, 22},
-};
-inline constexpr size_t kNumRadioPresets = sizeof(kRadioPresets) / sizeof(kRadioPresets[0]);
 
 
 struct RxPacketLogEntry {
@@ -365,7 +353,7 @@ struct SystemStatus {
   double   manual_lat_deg = 0.0;      // 0/0 = no manual position set
   double   manual_lon_deg = 0.0;
   char     sd_backup_status[96] = "Ready: tap Export (overwrites SD) or Import.";
-  char     radio_notice[96] = {0};   // set when stored settings were brought inside the band rules
+  char     radio_notice[96] = {0};   // set when stored or external settings were brought inside the region rules
   char     last_cli_reply[256] = "Ready. Type 'help', 'ver', 'get wifi.ip', 'clock'...";
   char     remote_admin_reply[256] = "Select Login, Get Stats, Telemetry, Neighbors, or ACL.";
   char     custom_vars_str[128] = "gps:1,gps_interval:60";

@@ -183,6 +183,7 @@ public:
   bool setCustomVar(const char* key_val) override;
   bool reconnectTarget(const char* target_spec) override;
   bool scanLanRadios(char* out_found, size_t max_len) override;
+  bool setRegion(faro::core::RadioRegionId id) override;
 
 private:
   bool sendFrame(const uint8_t* payload, size_t len);

@@ -20,11 +20,19 @@ class DeviceMeshActions : public core::IMeshActions {
 public:
   DeviceMeshActions(core::AppStore& store, core::MeshEventBus& bus);
 
+  // Reads MeshCore's state into the store. Call startRadioPolicy() once the saved UI state is loaded.
   void begin(mesh::MainBoard* board, MultiSerialInterface* ifaces,
              SensorManager* sensors, NodePrefs* prefs, hal::SdCard* sd = nullptr);
+  // Picks the region (saved one, else the one the stored radio settings fit) and brings the radio
+  // settings inside its rules.
+  void startRadioPolicy(bool region_was_saved);
   void pollTelemetry(uint32_t now_ms, uint16_t batt_mv, uint8_t batt_pct,
                      bool charging, bool sd_mounted, uint32_t sd_used_mb, uint32_t sd_total_mb,
                      uint32_t nmea_sentences);
+  // Radio settings changed outside Faro (phone app, TCP client, CLI): accept them when they fit a
+  // region (the region follows), clamp power / duty, otherwise restore the last accepted settings.
+  void checkExternalRadioChange(const char* source);
+
 
   // IMeshActions implementation
   bool sendDirectMessage(const uint8_t peer_pubkey[32], const char* text,
@@ -72,10 +80,12 @@ public:
   bool rebootRadio() override;
   bool exportSettingsToSd(bool overwrite = true) override;
   bool importSettingsFromSd() override;
+  bool setRegion(core::RadioRegionId id) override;
 
 private:
   void enforceRadioPolicy();
   void applyRadioConfig(const core::RadioConfig& applied);
+  core::RadioConfig radioFromPrefs() const;
 
   core::AppStore& _store;
   core::MeshEventBus& _bus;

@@ -97,13 +97,13 @@ void testRadioConfigValidator() {
     out.freq_mhz = f;
     assert(!RadioConfig::isValid(out));
   }
-  for (size_t i = 0; i < kNumRadioPresets; ++i) {
+  const RadioRegion& eu = RegionPolicy::get(RadioRegionId::EU868);
+  for (size_t i = 0; i < eu.preset_count; ++i) {
     RadioConfig pr{};
-    pr.freq_mhz = kRadioPresets[i].freq_mhz;
-    pr.bw_khz = kRadioPresets[i].bw_khz;
-    pr.sf = kRadioPresets[i].sf;
-    pr.cr = kRadioPresets[i].cr;
-    pr.tx_power_dbm = kRadioPresets[i].tx_power_dbm;
+    pr.freq_mhz = eu.presets[i].freq_mhz;
+    pr.bw_khz = eu.presets[i].bw_khz;
+    pr.sf = eu.presets[i].sf;
+    pr.cr = eu.presets[i].cr;
     assert(RadioConfig::isValid(pr));
   }
 
@@ -402,9 +402,100 @@ void testPowerBoardCurve() {
 
 }  // namespace
 
+void testRadioRegions() {
+  // Every preset fits its region at the region's power ceiling and default duty cycle
+  for (size_t ri = 0; ri < kNumRadioRegions; ++ri) {
+    const RadioRegion& reg = kRadioRegions[ri];
+    assert(size_t(reg.id) == ri);
+    assert(reg.preset_count > 0);
+    for (size_t i = 0; i < reg.preset_count; ++i) {
+      RadioConfig pr{};
+      pr.freq_mhz = reg.presets[i].freq_mhz;
+      pr.bw_khz = reg.presets[i].bw_khz;
+      pr.sf = reg.presets[i].sf;
+      pr.cr = reg.presets[i].cr;
+      pr.tx_power_dbm = RegionPolicy::maxConductedDbm(reg);
+      pr.airtime_factor = reg.default_airtime_factor;
+      assert(RadioConfig::isValid(pr, reg));
+      assert(RegionPolicy::findPreset(reg, pr.freq_mhz, pr.bw_khz, pr.sf, pr.cr) >= 0);
+    }
+    for (size_t i = 0; i < reg.repeat_count; ++i) {
+      assert(RegionPolicy::channelInRegion(reg, reg.repeat_freqs[i], 62.5f));
+    }
+  }
+
+  // Power ceilings: e.r.p. adds 2.15 dB, e.i.r.p. does not; the PA limit (22 dBm) wins
+  const RadioRegion& eu = RegionPolicy::get(RadioRegionId::EU868);
+  const RadioRegion& eu433 = RegionPolicy::get(RadioRegionId::EU433);
+  const RadioRegion& us = RegionPolicy::get(RadioRegionId::US915);
+  const RadioRegion& anz = RegionPolicy::get(RadioRegionId::ANZ915);
+  const RadioRegion& br = RegionPolicy::get(RadioRegionId::BR915);
+  assert(RegionPolicy::maxConductedDbm(eu, 3.0f) == 22);
+  assert(RegionPolicy::maxConductedDbm(eu433, 3.0f) == 9);    // 10 + 2.15 - 3
+  assert(RegionPolicy::maxConductedDbm(eu433, 10.0f) == 2);
+  assert(RegionPolicy::maxConductedDbm(us, 3.0f) == 22);
+  assert(RegionPolicy::maxConductedDbm(anz, 10.0f) == 20);    // 30 - 10
+  assert(fabsf(RegionPolicy::radiatedDbm(anz, 20, 10.0f) - 30.0f) < 0.01f);
+
+  // Bands: Brazil has a gap between 907.5 and 915 MHz
+  assert(RegionPolicy::channelInRegion(br, 905.0f, 62.5f));
+  assert(!RegionPolicy::channelInRegion(br, 910.0f, 62.5f));
+  assert(RegionPolicy::channelInRegion(br, 923.125f, 62.5f));
+  assert(!RegionPolicy::channelInRegion(us, 927.95f, 125.0f));  // upper edge
+  assert(!RegionPolicy::channelInRegion(eu433, 433.0f, 62.5f)); // below the ISM band
+
+  // Region detection: preferred region first, then a matching preset, then any band
+  RadioRegionId found = RadioRegionId::EU868;
+  assert(RegionPolicy::findRegionFor(869.618f, 62.5f, RadioRegionId::US915, found) && found == RadioRegionId::EU868);
+  assert(RegionPolicy::findRegionFor(910.525f, 62.5f, RadioRegionId::EU868, found) && found == RadioRegionId::US915);
+  assert(RegionPolicy::findRegionFor(917.375f, 62.5f, RadioRegionId::EU868, found) && found == RadioRegionId::ANZ915);
+  assert(RegionPolicy::findRegionFor(917.375f, 62.5f, RadioRegionId::US915, found) && found == RadioRegionId::US915);
+  assert(RegionPolicy::findRegionFor(433.650f, 250.0f, RadioRegionId::EU868, found) && found == RadioRegionId::EU433);
+  assert(!RegionPolicy::findRegionFor(868.100f, 125.0f, RadioRegionId::EU868, found));
+  assert(!RegionPolicy::findRegionFor(2450.0f, 125.0f, RadioRegionId::EU868, found));
+
+  // Duty cycle: EU keeps af >= 9 (10 %), the 915 regions have no duty limit
+  RadioConfig fast{};
+  fast.freq_mhz = 910.525f;
+  fast.bw_khz = 62.5f;
+  fast.airtime_factor = 1.0f;
+  assert(RadioConfig::isValid(fast, us));
+  assert(!RadioConfig::isValid(fast, eu));
+  RadioConfig eu_fast{};
+  eu_fast.airtime_factor = 1.0f;
+  assert(RadioConfig::sanitized(eu_fast, eu).airtime_factor >= 9.0f);
+  assert(fabsf(RadioConfig::sanitized(fast, us).airtime_factor - 1.0f) < 0.001f);
+
+  // Picking a region applies its first preset, its ceiling and its default duty cycle
+  uint8_t hash = 9;
+  RadioConfig def = RadioConfig::regionDefault(us, RadioConfig{}, hash);
+  assert(fabsf(def.freq_mhz - 910.525f) < 0.001f && def.tx_power_dbm == 22 && hash == 0);
+  assert(fabsf(def.airtime_factor - 1.0f) < 0.001f && RadioConfig::isValid(def, us));
+  def = RadioConfig::regionDefault(eu433, RadioConfig{}, hash);
+  assert(def.tx_power_dbm == 9 && def.airtime_factor >= 9.0f && RadioConfig::isValid(def, eu433));
+
+  // Client repeat only on the region's repeat frequencies (none in EU 433)
+  RadioConfig rep{};
+  rep.freq_mhz = 918.0f;
+  rep.client_repeat = true;
+  rep.airtime_factor = 1.0f;
+  assert(RadioConfig::isValid(rep, us));
+  rep.freq_mhz = 433.650f;
+  assert(!RadioConfig::isValid(rep, eu433));
+  assert(!RadioConfig::sanitized(rep, eu433).client_repeat);
+
+  // The store keeps the region
+  AppStore store;
+  assert(store.region() == RadioRegionId::EU868);
+  assert(store.setRegion(RadioRegionId::ANZ915) && store.region() == RadioRegionId::ANZ915);
+  assert(!store.setRegion(RadioRegionId(42)));
+  printf("[PASS] testRadioRegions\n");
+}
+
 int main() {
   testEventRing();
   testRadioConfigValidator();
+  testRadioRegions();
   testAppStoreMessagingAndRetries();
   testQrUriRoundTrip();
   testRepeatRoamService();

@@ -44,27 +44,46 @@ void DeviceMeshActions::begin(mesh::MainBoard* board, MultiSerialInterface* ifac
 
 
   syncStore();
+
+}
+
+void DeviceMeshActions::startRadioPolicy(bool region_was_saved) {
+  // The region follows the stored radio settings when they fit a known region (e.g. set earlier by the
+  // phone app); otherwise the saved region keeps and the settings are brought inside it.
+  const RadioConfig& r = _store.radio();
+  RadioRegionId found = _store.region();
+  if (RegionPolicy::findRegionFor(r.freq_mhz, r.bw_khz, _store.region(), found)) {
+    if (found != _store.region()) {
+      Serial.printf("[FARO] region %s -> %s (stored radio settings)\n", _store.regionInfo().code,
+                    RegionPolicy::get(found).code);
+    }
+    _store.setRegion(found);
+  }
   enforceRadioPolicy();
 
-  const RadioConfig& r = _store.radio();
-  Serial.printf("[FARO] radio %.3f MHz BW%.1f SF%u CR%u %d dBm (ERP %.1f dBm) duty<=%.0f%% | BLE PIN %s | "
-                "WiFi %s | contacts %u\n",
-                double(r.freq_mhz), double(r.bw_khz), unsigned(r.sf), unsigned(r.cr), int(r.tx_power_dbm),
-                double(RadioBandPolicy::erpDbm(r.tx_power_dbm)),
-                double(RadioBandPolicy::dutyCyclePercent(r.airtime_factor)),
+  const RadioConfig& rr = _store.radio();
+  const RadioRegion& reg = _store.regionInfo();
+  Serial.printf("[FARO] region %s (%s) | radio %.3f MHz BW%.1f SF%u CR%u %d dBm (%s %.1f dBm) duty<=%.0f%% | "
+                "BLE PIN %s | WiFi %s | contacts %u\n",
+                reg.code, region_was_saved ? "saved" : "detected",
+                double(rr.freq_mhz), double(rr.bw_khz), unsigned(rr.sf), unsigned(rr.cr), int(rr.tx_power_dbm),
+                RegionPolicy::powerRefLabel(reg), double(RegionPolicy::radiatedDbm(reg, rr.tx_power_dbm)),
+                double(RegionPolicy::dutyCyclePercent(rr.airtime_factor)),
                 (_prefs && _prefs->ble_pin == 0) ? "random" : "fixed",
                 _store.status().wifi_enabled ? "on" : "off", unsigned(_store.contactCount()));
 }
 
-// Bring stored radio settings (possibly written by another firmware or the phone app) inside the
-// band policy of Types.h. Every change is logged and shown in Settings > Radio; nothing silent.
+// Bring the radio settings (possibly written by another firmware or the phone app) inside the rules of
+// the selected region. Every change is logged and shown in Settings > Radio; nothing silent.
 void DeviceMeshActions::enforceRadioPolicy() {
   if (!_prefs) return;
+  const RadioRegion& reg = _store.regionInfo();
   RadioConfig cur = _store.radio();
-  RadioConfig fixed = RadioConfig::sanitized(cur);
-  if (!RadioBandPolicy::channelInBand(fixed.freq_mhz, fixed.bw_khz) ||
-      !RadioConfig::isValidSx1262Bandwidth(fixed.bw_khz)) {
-    const RadioPreset& def = kRadioPresets[0];
+  RadioConfig fixed = RadioConfig::sanitized(cur, reg);
+  if (!RegionPolicy::channelInRegion(reg, fixed.freq_mhz, fixed.bw_khz) ||
+      !RadioConfig::isValidSx1262Bandwidth(fixed.bw_khz) || fixed.sf < 5 || fixed.sf > 12 || fixed.cr < 5 ||
+      fixed.cr > 8) {
+    const RegionPreset& def = reg.presets[0];
     fixed.freq_mhz = def.freq_mhz;
     fixed.bw_khz = def.bw_khz;
     fixed.sf = def.sf;
@@ -77,14 +96,82 @@ void DeviceMeshActions::enforceRadioPolicy() {
                        fixed.client_repeat != cur.client_repeat;
   if (!changed) return;
   snprintf(_store.status().radio_notice, sizeof(_store.status().radio_notice),
-           "Radio limited to band rules: %.3f MHz BW%.1f %ddBm duty<=%.0f%%",
+           "Radio limited to %s rules: %.3f MHz BW%.1f %ddBm duty<=%.0f%%", reg.code,
            double(fixed.freq_mhz), double(fixed.bw_khz), int(fixed.tx_power_dbm),
-           double(RadioBandPolicy::dutyCyclePercent(fixed.airtime_factor)));
-  Serial.printf("[FARO] radio policy: %.3f/%.1f/SF%u/%ddBm/af%.1f -> %.3f/%.1f/SF%u/%ddBm/af%.1f\n",
+           double(RegionPolicy::dutyCyclePercent(fixed.airtime_factor)));
+  Serial.printf("[FARO] radio policy (%s): %.3f/%.1f/SF%u/%ddBm/af%.1f -> %.3f/%.1f/SF%u/%ddBm/af%.1f\n", reg.code,
                 double(cur.freq_mhz), double(cur.bw_khz), unsigned(cur.sf), int(cur.tx_power_dbm),
                 double(cur.airtime_factor), double(fixed.freq_mhz), double(fixed.bw_khz),
                 unsigned(fixed.sf), int(fixed.tx_power_dbm), double(fixed.airtime_factor));
   applyRadioConfig(fixed);
+}
+
+RadioConfig DeviceMeshActions::radioFromPrefs() const {
+  RadioConfig r = _store.radio();
+  if (!_prefs) return r;
+  r.freq_mhz = _prefs->freq > 0 ? _prefs->freq : r.freq_mhz;
+  r.bw_khz = _prefs->bw > 0 ? _prefs->bw : r.bw_khz;
+  r.sf = _prefs->sf;
+  r.cr = _prefs->cr;
+  r.tx_power_dbm = _prefs->tx_power_dbm;
+  r.rx_boosted_gain = (_prefs->rx_boosted_gain != 0);
+  r.client_repeat = _prefs->isRepeatEn();
+  r.path_hash_mode = _prefs->path_hash_mode;
+  r.airtime_factor = _prefs->airtime_factor;
+  return r;
+}
+
+void DeviceMeshActions::checkExternalRadioChange(const char* source) {
+  if (!_prefs) return;
+  const RadioConfig ext = radioFromPrefs();
+  const RadioConfig cur = _store.radio();
+  const bool regulated_change =
+      fabsf(ext.freq_mhz - cur.freq_mhz) > 0.0005f || fabsf(ext.bw_khz - cur.bw_khz) > 0.01f || ext.sf != cur.sf ||
+      ext.cr != cur.cr || ext.tx_power_dbm != cur.tx_power_dbm ||
+      fabsf(ext.airtime_factor - cur.airtime_factor) > 0.001f || ext.client_repeat != cur.client_repeat;
+  if (!regulated_change) {
+    if (ext.rx_boosted_gain != cur.rx_boosted_gain || ext.path_hash_mode != cur.path_hash_mode) {
+      _store.radio().rx_boosted_gain = ext.rx_boosted_gain;
+      _store.radio().path_hash_mode = ext.path_hash_mode;
+      _store.status().path_hash_bytes = uint8_t(ext.path_hash_mode <= 2 ? ext.path_hash_mode + 1 : 1);
+      _store.bumpVersion();
+    }
+    return;
+  }
+
+  RadioRegionId target = _store.region();
+  const bool shape_ok = RadioConfig::isValidSx1262Bandwidth(ext.bw_khz) && ext.sf >= 5 && ext.sf <= 12 &&
+                        ext.cr >= 5 && ext.cr <= 8;
+  bool fits = shape_ok && RegionPolicy::channelInRegion(_store.regionInfo(), ext.freq_mhz, ext.bw_khz);
+  if (shape_ok && !fits) fits = RegionPolicy::findRegionFor(ext.freq_mhz, ext.bw_khz, target, target);
+  SystemStatus& st = _store.status();
+  if (!fits) {
+    snprintf(st.radio_notice, sizeof(st.radio_notice), "Refused %.3f MHz BW%.1f from %s: outside the allowed bands",
+             double(ext.freq_mhz), double(ext.bw_khz), source);
+    Serial.printf("[FARO] radio change from %s refused (%.3f MHz BW%.1f SF%u) - restoring %.3f MHz\n", source,
+                  double(ext.freq_mhz), double(ext.bw_khz), unsigned(ext.sf), double(cur.freq_mhz));
+    applyRadioConfig(cur);
+    return;
+  }
+  const bool region_changed = (target != _store.region());
+  _store.setRegion(target);
+  RadioConfig fixed = RadioConfig::sanitized(ext, _store.regionInfo());
+  const bool clamped = fixed.tx_power_dbm != ext.tx_power_dbm || fabsf(fixed.airtime_factor - ext.airtime_factor) > 0.001f ||
+                       fixed.client_repeat != ext.client_repeat || fabsf(fixed.freq_mhz - ext.freq_mhz) > 0.0005f;
+  if (region_changed || clamped) {
+    snprintf(st.radio_notice, sizeof(st.radio_notice), "%s from %s: %.3f MHz %ddBm%s", _store.regionInfo().code,
+             source, double(fixed.freq_mhz), int(fixed.tx_power_dbm), clamped ? " (limited)" : "");
+  }
+  Serial.printf("[FARO] radio change from %s accepted (%s, %.3f MHz BW%.1f SF%u %ddBm af%.1f)%s\n", source,
+                _store.regionInfo().code, double(fixed.freq_mhz), double(fixed.bw_khz), unsigned(fixed.sf),
+                int(fixed.tx_power_dbm), double(fixed.airtime_factor), clamped ? " limited" : "");
+  if (clamped) {
+    applyRadioConfig(fixed);
+  } else {
+    _store.radio() = fixed;
+    _store.status().path_hash_bytes = uint8_t(fixed.path_hash_mode <= 2 ? fixed.path_hash_mode + 1 : 1);
+    _store.bumpVersion();
+  }
 }
 
 void DeviceMeshActions::syncStore() {
@@ -131,7 +218,7 @@ void DeviceMeshActions::syncStore() {
     r.bw_khz = _prefs->bw > 0 ? _prefs->bw : 62.5f;
     r.sf = _prefs->sf > 0 ? _prefs->sf : 8;
     r.cr = _prefs->cr > 0 ? _prefs->cr : 8;
-    r.tx_power_dbm = _prefs->tx_power_dbm != 0 ? _prefs->tx_power_dbm : LORA_TX_POWER;
+    r.tx_power_dbm = _prefs->tx_power_dbm;  // 0 dBm is a valid setting
     r.rx_boosted_gain = (_prefs->rx_boosted_gain != 0);
     r.client_repeat = _prefs->isRepeatEn();
     r.path_hash_mode = _prefs->path_hash_mode;
@@ -270,6 +357,9 @@ void DeviceMeshActions::pollTelemetry(uint32_t now_ms, uint16_t batt_mv, uint8_t
     g.valid = (g.lat_deg != 0.0 || g.lon_deg != 0.0);
     g.nmea_sentences = nmea_sentences;
   }
+
+  // Radio settings changed by the phone app / a TCP client since the last check
+  checkExternalRadioChange("app");
 }
 
 bool DeviceMeshActions::resendDirectMessage(uint32_t msg_id) {
@@ -526,10 +616,27 @@ bool DeviceMeshActions::requestTelemetry(const uint8_t target_pubkey[32]) {
 
 bool DeviceMeshActions::setRadioConfig(const RadioConfig& cfg) {
   if (!_prefs) return false;
-  RadioConfig applied = RadioConfig::sanitized(cfg);
-  if (!RadioConfig::isValid(applied)) return false;
+  const RadioRegion& region = _store.regionInfo();
+  RadioConfig applied = RadioConfig::sanitized(cfg, region);
+  if (!RadioConfig::isValid(applied, region)) return false;
   _store.status().radio_notice[0] = '\0';
   applyRadioConfig(applied);
+  return true;
+}
+
+bool DeviceMeshActions::setRegion(RadioRegionId id) {
+  if (!_prefs) return false;
+  const RadioRegionId before = _store.region();
+  if (!_store.setRegion(id)) return false;
+  uint8_t hash_bytes = 0;
+  const RadioConfig cfg = RadioConfig::regionDefault(_store.regionInfo(), _store.radio(), hash_bytes);
+  if (!setRadioConfig(cfg)) {
+    _store.setRegion(before);
+    return false;
+  }
+  if (hash_bytes != 0) setPathHashMode(hash_bytes);
+  Serial.printf("[FARO] region set to %s: %.3f MHz BW%.1f SF%u %ddBm\n", _store.regionInfo().code,
+                double(cfg.freq_mhz), double(cfg.bw_khz), unsigned(cfg.sf), int(_store.radio().tx_power_dbm));
   return true;
 }
 
@@ -604,11 +711,23 @@ bool DeviceMeshActions::setBlePin(uint32_t pin) {
 bool DeviceMeshActions::setRepeatEnabled(bool enabled) {
   if (!_prefs) return false;
   RadioConfig cfg = _store.radio();
+  const RadioRegion& region = _store.regionInfo();
   cfg.client_repeat = enabled;
-  if (enabled && !RadioConfig::isAllowedRepeatFrequency(cfg.freq_mhz)) {
-    // Move to a repeat frequency only if the current bandwidth still fits the band there
-    cfg.freq_mhz = 869.525f;
-    if (!RadioBandPolicy::channelInBand(cfg.freq_mhz, cfg.bw_khz)) return false;
+  if (enabled && !RadioConfig::isAllowedRepeatFrequency(cfg.freq_mhz, region)) {
+    // Move to the region's repeat frequency only if the current bandwidth still fits the band there
+    if (region.repeat_count == 0) {
+      snprintf(_store.status().radio_notice, sizeof(_store.status().radio_notice),
+               "%s has no client-repeat frequency", region.code);
+      _store.bumpVersion();
+      return false;
+    }
+    cfg.freq_mhz = region.repeat_freqs[0];
+    if (!RegionPolicy::channelInRegion(region, cfg.freq_mhz, cfg.bw_khz)) {
+      snprintf(_store.status().radio_notice, sizeof(_store.status().radio_notice),
+               "Repeat needs %.3f MHz: BW %.1f kHz does not fit there", double(cfg.freq_mhz), double(cfg.bw_khz));
+      _store.bumpVersion();
+      return false;
+    }
   }
   return setRadioConfig(cfg);
 }
@@ -752,6 +871,8 @@ bool DeviceMeshActions::runCliCommand(const char* cmd, char* out_reply, size_t m
   bool handled = false;
   if (_prefs && _prefs->getRadioPrefs()->handleCommand(cmd, 0, reply)) {
     if (_prefs->getRadioPrefs()->isDirty()) the_mesh.savePrefs();
+    // `set radio`, `set tx`, `set af` ... must stay inside the region rules as well
+    checkExternalRadioChange("CLI");
     handled = true;
   } else if (_board && _board->handleCommand(cmd, 0, reply)) {
     if (_prefs && _prefs->isDirty()) the_mesh.savePrefs();
@@ -761,7 +882,23 @@ bool DeviceMeshActions::runCliCommand(const char* cmd, char* out_reply, size_t m
     handled = true;
   } else if (strcmp(cmd, "help") == 0) {
     snprintf(reply, sizeof(reply),
-             "> Commands: ver, get name, set name <x>, set prv.key <hex>, export settings, import settings, clock, reboot");
+             "> Commands: ver, get name, set name <x>, get region, set region <eu868|eu433|us915|anz915|br915>, "
+             "set prv.key <hex>, export settings, import settings, clock, reboot");
+    handled = true;
+  } else if (strcmp(cmd, "get region") == 0) {
+    snprintf(reply, sizeof(reply), "> %s (%s)", _store.regionInfo().code, _store.regionInfo().name);
+    handled = true;
+  } else if (strncmp(cmd, "set region ", 11) == 0) {
+    static const char* const kCodes[] = {"eu868", "eu433", "us915", "anz915", "br915"};
+    int found = -1;
+    for (size_t i = 0; i < sizeof(kCodes) / sizeof(kCodes[0]); ++i) {
+      if (strcasecmp(cmd + 11, kCodes[i]) == 0) found = int(i);
+    }
+    if (found >= 0 && setRegion(RadioRegionId(found))) {
+      snprintf(reply, sizeof(reply), "> Region %s: %.3f MHz", _store.regionInfo().code, double(_store.radio().freq_mhz));
+    } else {
+      snprintf(reply, sizeof(reply), "> Error: unknown or locked region");
+    }
     handled = true;
   } else if (strncmp(cmd, "set name ", 9) == 0) {
     if (setNodeName(cmd + 9)) {
@@ -1100,7 +1237,17 @@ bool DeviceMeshActions::importSettingsFromSd() {
   // Apply imported settings to both AppStore and MeshCore NodePrefs + hardware drivers.
   // setRadioConfig() applies the band policy, so a file cannot set an out-of-band radio.
   setNodeName(snap.node_name);
-  setRadioConfig(snap.radio);
+  bool radio_ok = setRadioConfig(snap.radio);
+  if (!radio_ok) {
+    // Settings saved in another region: follow it like a change from the phone app
+    RadioRegionId other = _store.region();
+    if (RegionPolicy::findRegionFor(snap.radio.freq_mhz, snap.radio.bw_khz, other, other)) {
+      const RadioRegionId before = _store.region();
+      _store.setRegion(other);
+      radio_ok = setRadioConfig(snap.radio);
+      if (!radio_ok) _store.setRegion(before);
+    }
+  }
   st.telemetry_loc_perm = snap.telemetry_loc_perm % 3;
   st.telemetry_env_perm = snap.telemetry_env_perm % 3;
   st.manual_lat_deg = snap.manual_lat_deg;
@@ -1136,8 +1283,12 @@ bool DeviceMeshActions::importSettingsFromSd() {
   st.sd_mounted = _sd->isMounted();
   st.sd_total_mb = _sd->totalMB();
   st.sd_used_mb = _sd->usedMB();
-  snprintf(st.sd_backup_status, sizeof(st.sd_backup_status),
-           "OK: Imported settings from SD (%s)!", st.node_name);
+  if (radio_ok) {
+    snprintf(st.sd_backup_status, sizeof(st.sd_backup_status), "OK: Imported settings from SD (%s)!", st.node_name);
+  } else {
+    snprintf(st.sd_backup_status, sizeof(st.sd_backup_status),
+             "Imported, except radio: %.3f MHz is outside the allowed bands", double(snap.radio.freq_mhz));
+  }
   _store.bumpVersion();
   return true;
 }
