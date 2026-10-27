@@ -511,24 +511,33 @@ void UITask::onACKRecv(uint32_t ack_crc) {
   _ctrl->bus.push(ev);
 }
 
-void UITask::onTraceRecv(mesh::Packet*, uint32_t tag, uint32_t auth_code, uint8_t flags,
+void UITask::onTraceRecv(mesh::Packet* pkt, uint32_t tag, uint32_t auth_code, uint8_t flags,
                          const uint8_t* path_snrs, const uint8_t* path_hashes, uint8_t path_len) {
   if (!_ctrl) return;
+  // path_len counts hash bytes; each hop has 1 << (flags & 3) of them and one SNR (x4)
+  const uint8_t path_sz = flags & 0x03;
+  const uint8_t hops = uint8_t(path_len >> path_sz);
   faro::core::MeshEvent ev{};
   ev.type = faro::core::MeshEventType::TraceRecv;
   ev.trace.tag = tag;
   ev.trace.auth_code = auth_code;
   ev.trace.flags = flags;
-  ev.trace.hop_count = path_len > 16 ? 16 : path_len;
+  ev.trace.hop_count = hops > 16 ? 16 : hops;
   for (uint8_t i = 0; i < ev.trace.hop_count; ++i) {
-    ev.trace.hops[i].hash = path_hashes ? path_hashes[i] : 0;
+    ev.trace.hops[i].hash = path_hashes ? path_hashes[size_t(i) << path_sz] : 0;
     ev.trace.hops[i].snr_q4 = path_snrs ? int8_t(path_snrs[i]) : 0;
   }
+  ev.trace.final_snr_q4 = pkt ? int8_t(pkt->getSNR() * 4) : 0;  // last hop, back to this device
+  ev.snr_q4 = ev.trace.final_snr_q4;
+  ev.rssi = int16_t(radio_driver.getLastRSSI());
+  ev.trace.timestamp = the_mesh.getRTCClock()->getCurrentTime();
   ev.trace.valid = true;
   _ctrl->bus.push(ev);
 }
 
-void UITask::onControlDataRecv(const mesh::Packet*) {}
+void UITask::onControlDataRecv(const mesh::Packet* pkt) {
+  if (_ctrl) _ctrl->actions.onControlData(pkt);
+}
 
 void UITask::onChannelDataRecv(mesh::Packet*, const mesh::GroupChannel&, uint16_t data_type,
                                const uint8_t* data, size_t data_len) {
@@ -537,8 +546,10 @@ void UITask::onChannelDataRecv(mesh::Packet*, const mesh::GroupChannel&, uint16_
   (void)data_len;
 }
 
-bool UITask::onUnhandledResponse(const ContactInfo&, uint32_t, const uint8_t*, uint8_t) {
-  return false;
+// Answers to requests Faro sent itself (status, telemetry, neighbours, ACL, login, path discovery).
+// Returning true keeps them from the phone app, which never asked for them.
+bool UITask::onUnhandledResponse(const ContactInfo& from, uint32_t tag, const uint8_t* data, uint8_t len) {
+  return _ctrl ? _ctrl->actions.claimResponse(from, tag, data, len) : false;
 }
 
 void UITask::onRawDataRecv(mesh::Packet*) {}

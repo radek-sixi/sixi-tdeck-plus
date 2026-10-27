@@ -383,6 +383,26 @@ bool VirtualMeshActions::setRegion(core::RadioRegionId id) {
   return true;
 }
 
+bool VirtualMeshActions::scanNearbyNodes() {
+  // Two demo repeaters answer the discover request
+  _store.clearDiscovered();
+  size_t answered = 0;
+  for (size_t i = 0; i < core::AppStore::kMaxContacts && answered < 2; ++i) {
+    const auto& c = _store.contacts()[i];
+    if (!c.valid || c.role != core::NodeRole::Repeater) continue;
+    core::MeshEvent ev{};
+    ev.type = core::MeshEventType::NodeDiscovered;
+    memcpy(ev.pub_key, c.pub_key, 8);
+    ev.role = c.role;
+    ev.snr_q4 = int8_t(24 - 8 * int(answered));
+    ev.snr2_q4 = int8_t(20 - 6 * int(answered));
+    ev.rssi = int16_t(-80 - 7 * int(answered));
+    _bus.push(ev);
+    ++answered;
+  }
+  return true;
+}
+
 bool VirtualMeshActions::setNodeName(const char* name) {
   if (!name || !name[0]) return false;
   strncpy(_store.status().node_name, name, sizeof(_store.status().node_name) - 1);
@@ -553,7 +573,7 @@ bool VirtualMeshActions::setPathHashMode(uint8_t hash_bytes) {
 bool VirtualMeshActions::useLastAdvertPath(const uint8_t target_pubkey[32]) {
   if (!target_pubkey) return false;
   if (core::ContactRecord* c = _store.findContactByPubKeyMutable(target_pubkey)) {
-    c->out_path_len = 2;
+    c->out_path_len = core::ContactRecord::encodePathLen(1, 2);
     c->out_path[0] = 0xC3;
     c->out_path[1] = 0xD4;
     _store.bumpVersion();

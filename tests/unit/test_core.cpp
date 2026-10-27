@@ -492,10 +492,121 @@ void testRadioRegions() {
   printf("[PASS] testRadioRegions\n");
 }
 
+void testPathEncodingAndTrace() {
+  ContactRecord c{};
+  assert(!c.hasPath() && c.pathHops() == 0 && c.pathByteLen() == 0);
+  c.out_path_len = ContactRecord::encodePathLen(2, 3);  // 3 hops of 2-byte hashes
+  assert(c.out_path_len == 67 && c.hasPath() && c.pathHops() == 3 && c.pathHashSize() == 2 && c.pathByteLen() == 6);
+
+  // 1-byte path A1,B2 to a repeater T: A1 B2 T B2 A1
+  const uint8_t target[32] = {0x7E, 0x7F};
+  const uint8_t p1[64] = {0xA1, 0xB2};
+  uint8_t path[64] = {0};
+  uint8_t flags = 0xFF;
+  size_t n = AppStore::buildTracePath(p1, ContactRecord::encodePathLen(1, 2), target, true, path, sizeof(path), flags);
+  const uint8_t want1[5] = {0xA1, 0xB2, 0x7E, 0xB2, 0xA1};
+  assert(n == 5 && flags == 0 && memcmp(path, want1, 5) == 0);
+  // Same path to a chat node (does not forward): A1 B2 A1
+  n = AppStore::buildTracePath(p1, ContactRecord::encodePathLen(1, 2), target, false, path, sizeof(path), flags);
+  const uint8_t want2[3] = {0xA1, 0xB2, 0xA1};
+  assert(n == 3 && memcmp(path, want2, 3) == 0);
+  // 2-byte hashes: trace hashes are 2 bytes (flags 1)
+  const uint8_t p2[64] = {0xA1, 0xA2};
+  n = AppStore::buildTracePath(p2, ContactRecord::encodePathLen(2, 1), target, true, path, sizeof(path), flags);
+  const uint8_t want3[6] = {0xA1, 0xA2, 0x7E, 0x7F, 0xA1, 0xA2};
+  assert(n == 6 && flags == 1 && memcmp(path, want3, 6) == 0);
+  // Nothing to trace: unknown path, or a direct neighbour that does not forward
+  assert(AppStore::buildTracePath(p1, 0xFF, target, true, path, sizeof(path), flags) == 0);
+  assert(AppStore::buildTracePath(p1, ContactRecord::encodePathLen(1, 0), target, false, path, sizeof(path), flags) == 0);
+  assert(AppStore::buildTracePath(p1, ContactRecord::encodePathLen(1, 0), target, true, path, sizeof(path), flags) == 1);
+  printf("[PASS] testPathEncodingAndTrace\n");
+}
+
+void testRemoteResponses() {
+  AppStore store;
+  ContactRecord rpt{};
+  rpt.pub_key[0] = 0x42;
+  rpt.pub_key[1] = 0x43;
+  strncpy(rpt.name, "Ridge-RPT", sizeof(rpt.name) - 1);
+  rpt.role = NodeRole::Repeater;
+  rpt.valid = true;
+  store.upsertContact(rpt);
+  ContactRecord nb{};
+  nb.pub_key[0] = 0x11;
+  nb.pub_key[1] = 0x22;
+  nb.pub_key[2] = 0x33;
+  nb.pub_key[3] = 0x44;
+  strncpy(nb.name, "Valley", sizeof(nb.name) - 1);
+  nb.valid = true;
+  store.upsertContact(nb);
+
+  // Status (RepeaterStats, little endian)
+  uint8_t st[56] = {0};
+  const uint16_t batt = 4012;
+  const int16_t noise = -110, rssi = -80, snr_q4 = 20;
+  const uint32_t up = 7200;
+  memcpy(&st[0], &batt, 2);
+  memcpy(&st[4], &noise, 2);
+  memcpy(&st[6], &rssi, 2);
+  memcpy(&st[20], &up, 4);
+  memcpy(&st[42], &snr_q4, 2);
+  store.applyRemoteResponse(RemoteRequestKind::Status, rpt.pub_key, st, sizeof(st));
+  assert(strstr(store.status().remote_admin_reply, "4012mV") != nullptr);
+  assert(strstr(store.status().remote_admin_reply, "SNR +5dB") != nullptr);
+  assert(store.findContactByPubKey(rpt.pub_key)->remote_batt_mv == 4012);
+
+  // Telemetry: Cayenne LPP voltage 4.10 V (channel 1) and temperature 22.5 C
+  const uint8_t lpp[] = {1, 116, 0x01, 0x9A, 1, 103, 0x00, 0xE1};
+  store.applyRemoteResponse(RemoteRequestKind::Telemetry, rpt.pub_key, lpp, sizeof(lpp));
+  assert(store.findContactByPubKey(rpt.pub_key)->remote_batt_mv == 4100);
+  assert(store.findContactByPubKey(rpt.pub_key)->remote_temp_c == 22);
+  assert(strstr(store.status().remote_admin_reply, "4.10V") != nullptr);
+
+  // Neighbours: total 1, count 1, [prefix 4][secs ago][snr x4]
+  uint8_t nbr[4 + 9] = {1, 0, 1, 0, 0x11, 0x22, 0x33, 0x44, 120, 0, 0, 0, uint8_t(int8_t(-12))};
+  store.applyRemoteResponse(RemoteRequestKind::Neighbours, rpt.pub_key, nbr, sizeof(nbr));
+  assert(strstr(store.status().remote_admin_reply, "Valley") != nullptr);
+  assert(strstr(store.status().remote_admin_reply, "-3dB") != nullptr);
+
+  // Login answer: [OK][keep-alive][is_admin][permissions]
+  const uint8_t login_ok[4] = {0, 0, 1, 3};
+  store.applyRemoteResponse(RemoteRequestKind::Login, rpt.pub_key, login_ok, sizeof(login_ok));
+  assert(store.status().remote_logged_in && strstr(store.status().remote_admin_reply, "admin") != nullptr);
+  const uint8_t login_bad[1] = {1};
+  store.applyRemoteResponse(RemoteRequestKind::Login, rpt.pub_key, login_bad, sizeof(login_bad));
+  assert(!store.status().remote_logged_in);
+
+  // A RemoteResponse event mirrors the path MeshCore learned
+  MeshEvent ev{};
+  ev.type = MeshEventType::RemoteResponse;
+  ev.resp_kind = uint8_t(RemoteRequestKind::PathDiscovery);
+  memcpy(ev.pub_key, rpt.pub_key, 32);
+  ev.path_len = ContactRecord::encodePathLen(1, 2);
+  ev.path[0] = 0xC3;
+  ev.path[1] = 0xD4;
+  store.applyEvent(ev, 1000);
+  const ContactRecord* r = store.findContactByPubKey(rpt.pub_key);
+  assert(r->pathHops() == 2 && r->out_path[1] == 0xD4);
+
+  // CLI replies go to the admin log, not into the chat history
+  const size_t before = store.messageCount();
+  MeshEvent cli{};
+  cli.type = MeshEventType::DirectMessageRecv;
+  cli.txt_type = 1;
+  memcpy(cli.pub_key, rpt.pub_key, 32);
+  strncpy(cli.name, rpt.name, sizeof(cli.name) - 1);
+  strncpy(cli.text, "v1.18.0", sizeof(cli.text) - 1);
+  store.applyEvent(cli, 2000);
+  assert(store.messageCount() == before && strstr(store.status().remote_admin_reply, "v1.18.0") != nullptr);
+  printf("[PASS] testRemoteResponses\n");
+}
+
 int main() {
   testEventRing();
   testRadioConfigValidator();
   testRadioRegions();
+  testPathEncodingAndTrace();
+  testRemoteResponses();
   testAppStoreMessagingAndRetries();
   testQrUriRoundTrip();
   testRepeatRoamService();

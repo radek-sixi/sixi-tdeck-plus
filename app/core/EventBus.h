@@ -20,6 +20,8 @@ enum class MeshEventType : uint8_t {
   TraceRecv,
   ControlDataRecv,
   ChannelDataRecv,
+  RemoteResponse,      // answer to our login / status / telemetry / binary request (raw bytes in text[])
+  NodeDiscovered,      // answer to our zero-hop discover request
   NotifyStateChanged
 };
 
@@ -44,6 +46,9 @@ struct MeshEvent {
 
   // Text / binary / ACK / Queue
   char     text[160] = {0};
+  uint8_t  data_len = 0;     // RemoteResponse: bytes used in text[]
+  uint8_t  resp_kind = 0;    // RemoteResponse: RemoteRequestKind
+  int8_t   snr2_q4 = 0;      // NodeDiscovered: how the node heard us
   uint32_t ack_crc = 0;
   uint16_t queue_size = 0;
 

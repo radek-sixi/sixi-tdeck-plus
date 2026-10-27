@@ -33,6 +33,9 @@ public:
   // region (the region follows), clamp power / duty, otherwise restore the last accepted settings.
   void checkExternalRadioChange(const char* source);
 
+  // Listener hooks (UITask). claimResponse() returns true for answers to Faro's own requests.
+  bool claimResponse(const ContactInfo& contact, uint32_t tag, const uint8_t* data, uint8_t len);
+  void onControlData(const mesh::Packet* pkt);
 
   // IMeshActions implementation
   bool sendDirectMessage(const uint8_t peer_pubkey[32], const char* text,
@@ -80,12 +83,34 @@ public:
   bool rebootRadio() override;
   bool exportSettingsToSd(bool overwrite = true) override;
   bool importSettingsFromSd() override;
+  bool requestRemoteBinary(const uint8_t target_pubkey[32], const char* subcmd) override;
+  bool scanNearbyNodes() override;
+  bool useLastAdvertPath(const uint8_t target_pubkey[32]) override;
+  bool exportContactUri(const uint8_t target_pubkey[32], char* out_uri, size_t max_len) override;
+  bool importContactUri(const char* uri_or_hex) override;
+  bool getCustomVars(char* out_vars, size_t max_len) override;
+  bool setCustomVar(const char* key_val) override;
   bool setRegion(core::RadioRegionId id) override;
 
 private:
   void enforceRadioPolicy();
   void applyRadioConfig(const core::RadioConfig& applied);
   core::RadioConfig radioFromPrefs() const;
+  void notePending(core::RemoteRequestKind kind, const uint8_t pub_key[32], uint32_t tag, uint32_t est_timeout);
+  bool sendTrackedRequest(core::RemoteRequestKind kind, const uint8_t pub_key[32], const uint8_t* req,
+                          uint8_t req_len, bool force_flood);
+
+  struct PendingRequest {
+    core::RemoteRequestKind kind = core::RemoteRequestKind::None;
+    uint8_t  prefix[8] = {0};
+    uint32_t tag = 0;
+    uint32_t expires_ms = 0;
+    bool     used = false;
+  };
+  static constexpr size_t kMaxPending = 8;
+  PendingRequest _pending[kMaxPending] = {};
+  uint32_t _discover_tag = 0;
+  uint32_t _discover_until_ms = 0;
 
   core::AppStore& _store;
   core::MeshEventBus& _bus;

@@ -89,6 +89,25 @@ AppStore::AppStore() {
 void AppStore::applyEvent(const MeshEvent& ev, uint32_t now_ms) {
   switch (ev.type) {
     case MeshEventType::DirectMessageRecv: {
+      if (ev.txt_type == 1) {
+        // TXT_TYPE_CLI_DATA: a repeater / room server answering our remote CLI command, not a chat line
+        snprintf(_status.remote_admin_reply, sizeof(_status.remote_admin_reply), "[CLI] %.20s:\n%s",
+                 ev.name[0] ? ev.name : "node", ev.text);
+        if (!_ui_prefs.sniffer_paused) {
+          RxPacketLogEntry pl{};
+          pl.timestamp_ms = now_ms;
+          pl.snr_q4 = ev.snr_q4;
+          pl.rssi = ev.rssi;
+          pl.hops = ev.hops;
+          pl.len_bytes = uint16_t(16 + strlen(ev.text));
+          strncpy(pl.type_label, "CLI_RPLY", sizeof(pl.type_label) - 1);
+          snprintf(pl.summary, sizeof(pl.summary), "from %.20s [%uh]", ev.name[0] ? ev.name : "node",
+                   unsigned(ev.hops));
+          appendPacketLog(pl);
+        }
+        ++_version;
+        break;
+      }
       ContactRecord c{};
       memcpy(c.pub_key, ev.pub_key, 32);
       strncpy(c.name, ev.name[0] ? ev.name : "Peer", sizeof(c.name) - 1);
@@ -279,6 +298,76 @@ void AppStore::applyEvent(const MeshEvent& ev, uint32_t now_ms) {
     case MeshEventType::TraceRecv: {
       _last_trace = ev.trace;
       _last_trace.valid = true;
+      snprintf(_status.trace_status, sizeof(_status.trace_status), "Trace #%u back: %u hops",
+               unsigned(ev.trace.tag), unsigned(ev.trace.hop_count));
+      if (!_ui_prefs.sniffer_paused) {
+        RxPacketLogEntry pl{};
+        pl.timestamp_ms = now_ms;
+        pl.snr_q4 = ev.snr_q4;
+        pl.rssi = ev.rssi;
+        pl.hops = ev.trace.hop_count;
+        strncpy(pl.type_label, "TRACE", sizeof(pl.type_label) - 1);
+        snprintf(pl.summary, sizeof(pl.summary), "tag %u, %u hops", unsigned(ev.trace.tag),
+                 unsigned(ev.trace.hop_count));
+        appendPacketLog(pl);
+      }
+      ++_version;
+      break;
+    }
+    case MeshEventType::RemoteResponse: {
+      const auto kind = static_cast<RemoteRequestKind>(ev.resp_kind);
+      if (ev.path_len != 0xFF) {
+        // A flood answer taught MeshCore a path (stored there already); mirror it so the UI shows it
+        if (ContactRecord* c = findContactByPubKeyMutable(ev.pub_key)) {
+          c->out_path_len = ev.path_len;
+          memset(c->out_path, 0, sizeof(c->out_path));
+          memcpy(c->out_path, ev.path, c->pathByteLen());
+          c->online = true;
+        }
+      }
+      applyRemoteResponse(kind, ev.pub_key, reinterpret_cast<const uint8_t*>(ev.text),
+                          ev.data_len <= sizeof(ev.text) ? ev.data_len : sizeof(ev.text));
+      if (!_ui_prefs.sniffer_paused) {
+        RxPacketLogEntry pl{};
+        pl.timestamp_ms = now_ms;
+        pl.snr_q4 = ev.snr_q4;
+        pl.rssi = ev.rssi;
+        pl.len_bytes = ev.data_len;
+        strncpy(pl.type_label, "RESPONSE", sizeof(pl.type_label) - 1);
+        snprintf(pl.summary, sizeof(pl.summary), "%.20s (%u B)", ev.name[0] ? ev.name : "node",
+                 unsigned(ev.data_len));
+        appendPacketLog(pl);
+      }
+      ++_version;
+      break;
+    }
+    case MeshEventType::NodeDiscovered: {
+      DiscoveredNode* slot = nullptr;
+      for (size_t i = 0; i < kMaxDiscovered && !slot; ++i) {
+        if (_discovered[i].valid && memcmp(_discovered[i].prefix, ev.pub_key, 8) == 0) slot = &_discovered[i];
+      }
+      for (size_t i = 0; i < kMaxDiscovered && !slot; ++i) {
+        if (!_discovered[i].valid) slot = &_discovered[i];
+      }
+      if (slot) {
+        memcpy(slot->prefix, ev.pub_key, 8);
+        slot->role = ev.role;
+        slot->snr_out_q4 = ev.snr2_q4;
+        slot->snr_in_q4 = ev.snr_q4;
+        slot->rssi = ev.rssi;
+        slot->heard_ms = now_ms;
+        slot->valid = true;
+      }
+      if (!_ui_prefs.sniffer_paused) {
+        RxPacketLogEntry pl{};
+        pl.timestamp_ms = now_ms;
+        pl.snr_q4 = ev.snr_q4;
+        pl.rssi = ev.rssi;
+        strncpy(pl.type_label, "DISCOVER", sizeof(pl.type_label) - 1);
+        snprintf(pl.summary, sizeof(pl.summary), "%02X%02X%02X%02X out %+ddB", ev.pub_key[0], ev.pub_key[1],
+                 ev.pub_key[2], ev.pub_key[3], int(ev.snr2_q4) / 4);
+        appendPacketLog(pl);
+      }
       ++_version;
       break;
     }
@@ -866,6 +955,26 @@ bool AppStore::exportContactsJson(const char* filepath, char* out_saved_path, si
 }
 
 
+size_t AppStore::buildTracePath(const uint8_t* out_path, uint8_t out_path_len, const uint8_t* target_pub,
+                                bool target_repeats, uint8_t* path, size_t cap, uint8_t& flags) {
+  flags = 0;
+  if (out_path_len == 0xFF || !path) return 0;  // no known path
+  const uint8_t hash_size = uint8_t((out_path_len >> 6) + 1);
+  const uint8_t hops = out_path_len & 63;
+  // Trace hashes are 1, 2, 4 or 8 bytes (flags bits 0-1 = log2); 2 when the path uses 2-3 byte hashes
+  const uint8_t sz = hash_size >= 2 ? 2 : 1;
+  flags = sz == 2 ? 1 : 0;
+  uint8_t entries[33][2] = {};
+  uint8_t n = 0;
+  for (uint8_t h = 0; h < hops && n < 32 && out_path; ++h, ++n) memcpy(entries[n], &out_path[h * hash_size], sz);
+  if (target_repeats && target_pub && n < 33) memcpy(entries[n++], target_pub, sz);
+  if (n == 0) return 0;  // direct neighbour that does not forward
+  size_t len = 0;
+  for (uint8_t k = 0; k < n && len + sz <= cap; ++k, len += sz) memcpy(&path[len], entries[k], sz);
+  for (int k = int(n) - 2; k >= 0 && len + sz <= cap; --k, len += sz) memcpy(&path[len], entries[k], sz);
+  return len;
+}
+
 bool AppStore::setRegion(RadioRegionId id) {
   if (!RegionPolicy::isKnown(uint8_t(id))) return false;
   if (_region != id) {
@@ -873,6 +982,169 @@ bool AppStore::setRegion(RadioRegionId id) {
     ++_version;
   }
   return true;
+}
+
+size_t AppStore::discoveredCount() const {
+  size_t n = 0;
+  for (size_t i = 0; i < kMaxDiscovered; ++i) {
+    if (_discovered[i].valid) ++n;
+  }
+  return n;
+}
+
+void AppStore::clearDiscovered() {
+  for (size_t i = 0; i < kMaxDiscovered; ++i) _discovered[i] = DiscoveredNode{};
+  ++_version;
+}
+
+namespace {
+uint16_t rdU16(const uint8_t* p) { return uint16_t(p[0] | (uint16_t(p[1]) << 8)); }
+uint32_t rdU32(const uint8_t* p) {
+  return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+}
+int32_t rdBe(const uint8_t* p, size_t n, bool is_signed) {
+  uint32_t v = 0;
+  for (size_t i = 0; i < n; ++i) v = (v << 8) | p[i];
+  if (is_signed && n < 4 && (v & (1U << (n * 8 - 1)))) v |= ~((1U << (n * 8)) - 1U);
+  return int32_t(v);
+}
+
+// Payload size of a Cayenne LPP type, 0 when unknown (parsing stops there)
+size_t lppSize(uint8_t type) {
+  switch (type) {
+    case 0: case 1: case 102: case 104: case 120: case 142: return 1;
+    case 2: case 3: case 101: case 103: case 115: case 116: case 117: case 121: case 125: case 128: case 132: return 2;
+    case 135: return 3;
+    case 100: case 118: case 130: case 131: case 133: return 4;
+    case 113: case 134: return 6;
+    case 136: return 9;
+    default: return 0;
+  }
+}
+
+const char* contactLabel(const ContactRecord* c, const uint8_t* pub, char* buf, size_t cap) {
+  if (c && c->name[0]) return c->name;
+  snprintf(buf, cap, "%02X%02X%02X", pub[0], pub[1], pub[2]);
+  return buf;
+}
+}  // namespace
+
+void AppStore::applyRemoteResponse(RemoteRequestKind kind, const uint8_t pub_key[32], const uint8_t* d,
+                                   size_t len) {
+  ContactRecord* c = pub_key ? findContactByPubKeyMutable(pub_key) : nullptr;
+  char idbuf[8] = {0};
+  const char* who = contactLabel(c, pub_key ? pub_key : reinterpret_cast<const uint8_t*>("\0\0\0"), idbuf,
+                                 sizeof(idbuf));
+  char* out = _status.remote_admin_reply;
+  const size_t cap = sizeof(_status.remote_admin_reply);
+  if (c) c->online = true;
+
+  switch (kind) {
+    case RemoteRequestKind::Login: {
+      // [RESP_SERVER_LOGIN_OK][keep-alive][is_admin][permissions]... or legacy "OK"
+      const bool ok = (len >= 1 && d[0] == 0) || (len >= 2 && d[0] == 'O' && d[1] == 'K');
+      const bool admin = ok && len >= 3 && d[0] == 0 && d[2] != 0;
+      _status.remote_logged_in = ok;
+      snprintf(out, cap, "[LOGIN %s] %.24s%s", ok ? "OK" : "FAILED", who, admin ? " (admin)" : "");
+      break;
+    }
+    case RemoteRequestKind::Status: {
+      // Repeater / room server stats (RepeaterStats, little endian)
+      if (len < 24) {
+        snprintf(out, cap, "[STATUS] %.24s: short reply (%u B)", who, unsigned(len));
+        break;
+      }
+      const uint16_t batt = rdU16(d);
+      const int snr = len >= 44 ? int(int16_t(rdU16(d + 42))) / 4 : 0;
+      if (c) c->remote_batt_mv = batt;
+      snprintf(out, cap,
+               "[STATUS] %.24s\nBatt %umV  Queue %u  Noise %ddBm\nRSSI %ddBm SNR %+ddB  RX %u TX %u\n"
+               "Airtime %us  Up %uh",
+               who, unsigned(batt), unsigned(rdU16(d + 2)), int(int16_t(rdU16(d + 4))),
+               int(int16_t(rdU16(d + 6))), snr, unsigned(rdU32(d + 8)), unsigned(rdU32(d + 12)),
+               unsigned(rdU32(d + 16)), unsigned(rdU32(d + 20) / 3600U));
+      break;
+    }
+    case RemoteRequestKind::Telemetry:
+    case RemoteRequestKind::PathDiscovery: {
+      // Cayenne LPP records: [channel][type][big-endian value]
+      float volts = -1.0f, temp_c = -999.0f, hum = -1.0f, press = -1.0f;
+      size_t i = 0;
+      while (i + 2 <= len) {
+        const uint8_t ch = d[i];
+        const uint8_t type = d[i + 1];
+        const size_t n = lppSize(type);
+        if (n == 0 || i + 2 + n > len) break;
+        const uint8_t* v = d + i + 2;
+        if (type == 116 && (ch == 1 || volts < 0.0f)) volts = float(rdBe(v, 2, false)) / 100.0f;
+        else if (type == 103 && temp_c <= -999.0f) temp_c = float(rdBe(v, 2, true)) / 10.0f;
+        else if (type == 104 && hum < 0.0f) hum = float(v[0]) / 2.0f;
+        else if (type == 115 && press < 0.0f) press = float(rdBe(v, 2, false)) / 10.0f;
+        else if (type == 136 && c) {
+          const int32_t lat = rdBe(v, 3, true);  // 0.0001 deg
+          const int32_t lon = rdBe(v + 3, 3, true);
+          if (lat != 0 || lon != 0) {
+            c->gps_lat_e6 = lat * 100;
+            c->gps_lon_e6 = lon * 100;
+          }
+        }
+        i += 2 + n;
+      }
+      if (c && volts > 0.0f) c->remote_batt_mv = uint16_t(volts * 1000.0f);
+      if (c && temp_c > -999.0f) c->remote_temp_c = int8_t(temp_c);
+      int pos = snprintf(out, cap, "[%s] %.24s", kind == RemoteRequestKind::PathDiscovery ? "PATH" : "TELEMETRY",
+                         who);
+      if (kind == RemoteRequestKind::PathDiscovery && c && pos > 0 && size_t(pos) < cap) {
+        pos += snprintf(out + pos, cap - size_t(pos), c->hasPath() ? "\nPath found: %u hops" : "\nReplied (flood)",
+                        unsigned(c->pathHops()));
+      }
+      if (volts > 0.0f && pos > 0 && size_t(pos) < cap) pos += snprintf(out + pos, cap - size_t(pos), "\nBatt %.2fV", double(volts));
+      if (temp_c > -999.0f && pos > 0 && size_t(pos) < cap) pos += snprintf(out + pos, cap - size_t(pos), "  Temp %.1fC", double(temp_c));
+      if (hum >= 0.0f && pos > 0 && size_t(pos) < cap) pos += snprintf(out + pos, cap - size_t(pos), "  Hum %.0f%%", double(hum));
+      if (press >= 0.0f && pos > 0 && size_t(pos) < cap) pos += snprintf(out + pos, cap - size_t(pos), "  %.0fhPa", double(press));
+      break;
+    }
+    case RemoteRequestKind::Neighbours: {
+      // [total u16][count u16] then [prefix 4][heard secs ago u32][snr x4 i8]
+      if (len < 4) {
+        snprintf(out, cap, "[NEIGHBOURS] %.24s: short reply", who);
+        break;
+      }
+      const unsigned total = rdU16(d), cnt = rdU16(d + 2);
+      int pos = snprintf(out, cap, "[NEIGHBOURS] %.20s: %u of %u", who, cnt, total);
+      size_t off = 4;
+      for (unsigned k = 0; k < cnt && k < 5 && off + 9 <= len && pos > 0 && size_t(pos) < cap; ++k, off += 9) {
+        const ContactRecord* nb = nullptr;
+        for (size_t j = 0; j < kMaxContacts && !nb; ++j) {
+          if (_contacts[j].valid && memcmp(_contacts[j].pub_key, d + off, 4) == 0) nb = &_contacts[j];
+        }
+        char nid[12];
+        snprintf(nid, sizeof(nid), "%02X%02X%02X%02X", d[off], d[off + 1], d[off + 2], d[off + 3]);
+        pos += snprintf(out + pos, cap - size_t(pos), "\n%-12.12s %+ddB %um ago", nb ? nb->name : nid,
+                        int(int8_t(d[off + 8])) / 4, unsigned(rdU32(d + off + 4) / 60U));
+      }
+      break;
+    }
+    case RemoteRequestKind::Acl: {
+      // [prefix 6][permissions] per entry
+      int pos = snprintf(out, cap, "[ACL] %.24s: %u entries", who, unsigned(len / 7));
+      for (size_t off = 0; off + 7 <= len && off < 7 * 5 && pos > 0 && size_t(pos) < cap; off += 7) {
+        const ContactRecord* e = findContactByPrefix(d + off);
+        char nid[14];
+        snprintf(nid, sizeof(nid), "%02X%02X%02X%02X", d[off], d[off + 1], d[off + 2], d[off + 3]);
+        pos += snprintf(out + pos, cap - size_t(pos), "\n%-12.12s perm %u", e ? e->name : nid, unsigned(d[off + 6]));
+      }
+      break;
+    }
+    case RemoteRequestKind::MinMaxAvg:
+      snprintf(out, cap, "[MIN/MAX/AVG] %.24s: %u B of sensor series", who, unsigned(len));
+      break;
+    case RemoteRequestKind::None:
+    default:
+      snprintf(out, cap, "[RESPONSE] %.24s: %u B", who, unsigned(len));
+      break;
+  }
+  ++_version;
 }
 
 namespace {

@@ -38,7 +38,7 @@ struct ContactRecord {
   char     name[32] = {0};
   NodeRole role = NodeRole::ChatNode;
   uint8_t  flags = 0;
-  uint8_t  out_path_len = 0xFF;  // 0xFF = flood, 0..64 = direct hop count
+  uint8_t  out_path_len = 0xFF;  // MeshCore encoding: 0xFF = flood, else bits 0-5 hops, bits 6-7 hash size - 1
   uint8_t  out_path[64] = {0};
   uint32_t last_advert_ts = 0;
   uint32_t lastmod_ts = 0;
@@ -64,6 +64,36 @@ struct ContactRecord {
   }
   double latDeg() const { return double(gps_lat_e6) / 1000000.0; }
   double lonDeg() const { return double(gps_lon_e6) / 1000000.0; }
+
+  bool hasPath() const { return out_path_len != 0xFF; }
+  uint8_t pathHops() const { return hasPath() ? uint8_t(out_path_len & 63) : 0; }
+  uint8_t pathHashSize() const { return hasPath() ? uint8_t((out_path_len >> 6) + 1) : 1; }
+  // Bytes of out_path in use (hops x hash size, at most the buffer)
+  uint8_t pathByteLen() const {
+    const unsigned n = unsigned(pathHops()) * pathHashSize();
+    return uint8_t(n > sizeof(out_path) ? sizeof(out_path) : n);
+  }
+  static uint8_t encodePathLen(uint8_t hash_size, uint8_t hops) {
+    if (hash_size < 1) hash_size = 1;
+    if (hash_size > 4) hash_size = 4;
+    return uint8_t(((hash_size - 1) << 6) | (hops & 63));
+  }
+};
+
+// Requests whose answers the on-device UI shows (matched by tag or, for logins, by contact)
+enum class RemoteRequestKind : uint8_t {
+  None = 0, Login, Status, Telemetry, Neighbours, Acl, MinMaxAvg, PathDiscovery
+};
+
+// A node that answered our zero-hop discover request (CTL_TYPE_NODE_DISCOVER_RESP)
+struct DiscoveredNode {
+  uint8_t  prefix[8] = {0};
+  NodeRole role = NodeRole::Unknown;
+  int8_t   snr_out_q4 = 0;   // how the node heard us
+  int8_t   snr_in_q4 = 0;    // how we heard the node
+  int16_t  rssi = -120;
+  uint32_t heard_ms = 0;
+  bool     valid = false;
 };
 
 struct ChannelRecord {
@@ -148,6 +178,7 @@ struct TraceResult {
   uint8_t  flags = 0;
   uint8_t  hop_count = 0;
   TraceHop hops[16] = {};
+  int8_t   final_snr_q4 = 0;  // SNR of the last hop, back to this device
   uint32_t timestamp = 0;
   bool     valid = false;
 };
@@ -354,6 +385,8 @@ struct SystemStatus {
   double   manual_lon_deg = 0.0;
   char     sd_backup_status[96] = "Ready: tap Export (overwrites SD) or Import.";
   char     radio_notice[96] = {0};   // set when stored or external settings were brought inside the region rules
+  char     trace_status[64] = {0};   // last trace request / result
+  char     export_status[80] = {0};  // last GPX / JSON export result
   char     last_cli_reply[256] = "Ready. Type 'help', 'ver', 'get wifi.ip', 'clock'...";
   char     remote_admin_reply[256] = "Select Login, Get Stats, Telemetry, Neighbors, or ACL.";
   char     custom_vars_str[128] = "gps:1,gps_interval:60";

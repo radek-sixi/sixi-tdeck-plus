@@ -355,9 +355,11 @@ void App::showScreen(ScreenId id) {
 void App::openChatWithContact(size_t contact_idx) {
   _selected_contact_idx = contact_idx;
   if (contact_idx < AppStore::kMaxContacts && _store.contacts()[contact_idx].valid) {
-    _store.clearContactUnread(_store.contacts()[contact_idx].pub_key);
-    // Ripple UI feature (free in Faro): auto-request telemetry when opening conversation
-    _actions.requestTelemetry(_store.contacts()[contact_idx].pub_key);
+    const ContactRecord& c = _store.contacts()[contact_idx];
+    _store.clearContactUnread(c.pub_key);
+    // Battery / temperature of the peer when a direct path is known; never floods the mesh just
+    // because a chat was opened
+    if (c.hasPath()) _actions.requestTelemetry(c.pub_key);
   }
   showScreen(ScreenId::ChatThread);
 }
@@ -1458,14 +1460,14 @@ void App::buildChatsView(lv_obj_t* parent) {
     lv_obj_set_style_text_color(info, p.text_primary, 0);
     int snr_db = int(c.last_snr_q4) / 4;
     bool dup_hash = _store.hasPathHashCollision(c.pub_key[0]);
-    if (c.out_path_len == 0xFF) {
+    if (!c.hasPath()) {
       lv_label_set_text_fmt(info, "%s%s [%s] Fl | %+ddB%s",
                             c.favourite ? "*" : "", c.name, roleBadge(c.role), snr_db,
                             dup_hash ? " !DUP" : "");
     } else {
       lv_label_set_text_fmt(info, "%s%s [%s] %uh | %+ddB%s",
                             c.favourite ? "*" : "", c.name, roleBadge(c.role),
-                            unsigned(c.out_path_len), snr_db, dup_hash ? " !DUP" : "");
+                            unsigned(c.pathHops()), snr_db, dup_hash ? " !DUP" : "");
     }
     lv_label_set_long_mode(info, LV_LABEL_LONG_CLIP);
 
@@ -1564,12 +1566,13 @@ void App::buildChatThreadView(lv_obj_t* parent) {
   }
 
   char hdr_title[64] = {0};
-  if (peer->out_path_len == 0xFF) {
-    snprintf(hdr_title, sizeof(hdr_title), "%.14s [?]%s", peer->name[0] ? peer->name : "Peer",
-             peer->online ? " ON" : "");
+  char batt[12] = {0};
+  if (peer->remote_batt_mv > 0) snprintf(batt, sizeof(batt), " %.2fV", double(peer->remote_batt_mv) / 1000.0);
+  if (!peer->hasPath()) {
+    snprintf(hdr_title, sizeof(hdr_title), "%.14s [?]%s", peer->name[0] ? peer->name : "Peer", batt);
   } else {
     snprintf(hdr_title, sizeof(hdr_title), "%.14s [%u]%s", peer->name[0] ? peer->name : "Peer",
-             unsigned(peer->out_path_len), peer->online ? " ON" : "");
+             unsigned(peer->pathHops()), batt);
   }
 
   lv_obj_t* hdr = createHeaderRow(parent, hdr_title, outdoor,
@@ -2289,6 +2292,26 @@ void App::buildDiscoverView(lv_obj_t* parent) {
     lv_obj_center(fl);
   }
 
+  // Answers to the last zero-hop scan (how each node heard us / how we heard it)
+  for (size_t i = 0; i < AppStore::kMaxDiscovered; ++i) {
+    const DiscoveredNode& d = _store.discovered()[i];
+    if (!d.valid) continue;
+    const ContactRecord* known = nullptr;
+    for (size_t j = 0; j < AppStore::kMaxContacts && !known; ++j) {
+      const auto& c = _store.contacts()[j];
+      if (c.valid && memcmp(c.pub_key, d.prefix, 8) == 0) known = &c;
+    }
+    lv_obj_t* sl = lv_label_create(parent);
+    lv_obj_set_width(sl, 300);
+    lv_obj_set_style_text_font(sl, &faro_font_mono_12, 0);
+    lv_obj_set_style_text_color(sl, p.success, 0);
+    char nm[16];
+    if (known) snprintf(nm, sizeof(nm), "%.14s", known->name);
+    else snprintf(nm, sizeof(nm), "%02X%02X%02X%02X", d.prefix[0], d.prefix[1], d.prefix[2], d.prefix[3]);
+    lv_label_set_text_fmt(sl, "SCAN %-14.14s [%s] in %+ddB out %+ddB", nm, roleBadge(d.role),
+                          int(d.snr_in_q4) / 4, int(d.snr_out_q4) / 4);
+  }
+
   // Heard & Discovered Nodes List (whole row clickable + big Select button)
   struct DiscNodeCtx { App* app; size_t idx; };
   static DiscNodeCtx s_dn_ctx[AppStore::kMaxContacts];
@@ -2323,7 +2346,7 @@ void App::buildDiscoverView(lv_obj_t* parent) {
     lv_obj_set_style_text_font(rl, &faro_font_mono_12, 0);
     lv_obj_set_style_text_color(rl, c.role == NodeRole::Repeater ? p.success : p.text_primary, 0);
 
-    uint8_t hops = (c.out_path_len == 0xFF) ? 0 : c.out_path_len;
+    uint8_t hops = c.pathHops();
     bool dup = _store.hasPathHashCollision(c.pub_key[0]);
     if (_discover_show_hash) {
       lv_label_set_text_fmt(rl, "%u> %-14.14s [%s] #%02X%s",
@@ -2373,8 +2396,8 @@ void App::buildContactsView(lv_obj_t* parent) {
     lv_obj_remove_flag(ccard, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t* js_btn = lv_button_create(ccard);
-    lv_obj_set_size(js_btn, 294, 48);
-    lv_obj_set_pos(js_btn, 0, 4);
+    lv_obj_set_size(js_btn, 294, 38);
+    lv_obj_set_pos(js_btn, 0, 2);
     Theme::styleTouchButton(js_btn, p.success, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(js_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -2389,21 +2412,33 @@ void App::buildContactsView(lv_obj_t* parent) {
     lv_obj_center(jsl);
 
     lv_obj_t* imp_btn = lv_button_create(ccard);
-    lv_obj_set_size(imp_btn, 294, 48);
-    lv_obj_set_pos(imp_btn, 0, 62);
+    lv_obj_set_size(imp_btn, 294, 38);
+    lv_obj_set_pos(imp_btn, 0, 46);
     Theme::styleTouchButton(imp_btn, p.accent, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(imp_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
-      if (self->_store.uiPrefs().clipboard[0]) {
-        self->_actions.importContactUri(self->_store.uiPrefs().clipboard);
+      auto& st = self->_store.status();
+      const char* clip = self->_store.uiPrefs().clipboard;
+      if (!clip[0]) {
+        snprintf(st.export_status, sizeof(st.export_status), "Clipboard empty: paste a meshcore:// URI first");
+      } else if (self->_actions.importContactUri(clip)) {
+        snprintf(st.export_status, sizeof(st.export_status), "Imported from clipboard");
+      } else {
+        snprintf(st.export_status, sizeof(st.export_status), "Not a contact / channel URI");
       }
-      self->_contacts_subpage = false;
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* iml = lv_label_create(imp_btn);
     lv_obj_set_style_text_font(iml, &faro_font_14, 0);
-    lv_label_set_text(iml, "Import Contact from URI");
+    lv_label_set_text(iml, "Import URI from clipboard");
     lv_obj_center(iml);
+
+    lv_obj_t* stl = lv_label_create(ccard);
+    lv_obj_set_pos(stl, 0, 90);
+    lv_obj_set_width(stl, 294);
+    lv_obj_set_style_text_font(stl, &faro_font_12, 0);
+    lv_obj_set_style_text_color(stl, p.text_secondary, 0);
+    lv_label_set_text(stl, _store.status().export_status[0] ? _store.status().export_status : "Exports go to the SD card (/faro/)");
     return;
   }
 
@@ -2604,12 +2639,15 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     lv_obj_set_width(info, 200);
     lv_obj_set_style_text_font(info, &faro_font_12, 0);
     lv_obj_set_style_text_color(info, p.text_primary, 0);
+    char extra[40] = {0};
+    if (c->remote_batt_mv > 0) {
+      snprintf(extra, sizeof(extra), "\nBatt %.2fV", double(c->remote_batt_mv) / 1000.0);
+    }
     lv_label_set_text_fmt(info,
-                          "%s [%s] #%02X\nKey: %s...\nPath: %s (%u hops)\nGPS: %.4f, %.4f",
+                          "%s [%s] #%02X\nKey: %s...\nPath: %s (%u hops)\nGPS: %.4f, %.4f%s",
                           c->name, roleBadge(c->role), unsigned(c->pub_key[0]), hex_pre,
-                          c->out_path_len == 0xFF ? "Flood" : "Direct",
-                          c->out_path_len == 0xFF ? 0U : unsigned(c->out_path_len),
-                          c->latDeg(), c->lonDeg());
+                          c->hasPath() ? "Direct" : "Flood", unsigned(c->pathHops()),
+                          c->latDeg(), c->lonDeg(), extra);
 
     // Action row: [Chat] [Share] [URI] [Map] [Del]
     lv_obj_t* chat_btn = lv_button_create(split);
@@ -2648,10 +2686,14 @@ void App::buildContactDetailView(lv_obj_t* parent) {
       const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
       char out_u[220] = {0};
       self->_actions.exportContactUri(peer.pub_key, out_u, sizeof(out_u));
+      self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* url = lv_label_create(uri_btn);
     lv_obj_set_style_text_font(url, &faro_font_12, 0);
-    lv_label_set_text(url, "URI");
+    char my_uri[220] = {0};
+    const bool in_clip = AppStore::formatContactUri(*c, my_uri, sizeof(my_uri)) &&
+                         strncmp(_store.uiPrefs().clipboard, my_uri, sizeof(_store.uiPrefs().clipboard) - 1) == 0;
+    lv_label_set_text(url, in_clip ? "OK" : "URI");
     lv_obj_center(url);
 
     lv_obj_t* map_btn = lv_button_create(split);
@@ -2702,15 +2744,18 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     lv_obj_remove_flag(pcard, LV_OBJ_FLAG_SCROLLABLE);
 
     char path_str[64] = {0};
-    if (c->out_path_len == 0xFF) {
+    if (!c->hasPath()) {
       snprintf(path_str, sizeof(path_str), "Flood (auto-discover)");
-    } else if (c->out_path_len == 0) {
+    } else if (c->pathHops() == 0) {
       snprintf(path_str, sizeof(path_str), "Direct (0-hop)");
     } else {
+      const uint8_t hs = c->pathHashSize();
       size_t pos = 0;
-      for (uint8_t h = 0; h < c->out_path_len && h < 8 && pos + 4 < sizeof(path_str); ++h) {
-        pos += size_t(snprintf(path_str + pos, sizeof(path_str) - pos, "%s%02X",
-                               h > 0 ? "," : "", unsigned(c->out_path[h])));
+      for (uint8_t h = 0; h < c->pathHops() && h < 6 && pos + 2 * hs + 2 < sizeof(path_str); ++h) {
+        if (h > 0) path_str[pos++] = ',';
+        for (uint8_t b = 0; b < hs; ++b) {
+          pos += size_t(snprintf(path_str + pos, sizeof(path_str) - pos, "%02X", unsigned(c->out_path[h * hs + b])));
+        }
       }
     }
 
@@ -2735,19 +2780,42 @@ void App::buildContactDetailView(lv_obj_t* parent) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       if (!self || !self->_compose_ta) return;
       const char* txt = lv_textarea_get_text(self->_compose_ta);
-      auto& peer = self->_store.contactsMutable()[self->_selected_contact_idx];
-      uint8_t count = 0;
-      const char* p = txt;
-      while (p && *p && count < 16) {
-        while (*p == ',' || *p == ' ') ++p;
-        if (!*p) break;
-        unsigned int val = 0;
-        if (sscanf(p, "%2x", &val) == 1) {
-          peer.out_path[count++] = uint8_t(val);
+      ContactRecord peer = self->_store.contacts()[self->_selected_contact_idx];
+      // One hop per comma-separated hex group; its length sets the path hash size (1-3 bytes)
+      uint8_t buf[64] = {0};
+      uint8_t hops = 0, hash_size = 0;
+      const char* q = txt;
+      bool ok = q != nullptr;
+      while (ok && *q && hops < 16) {
+        while (*q == ',' || *q == ' ') ++q;
+        if (!*q) break;
+        const char* start = q;
+        while (*q && *q != ',' && *q != ' ') ++q;
+        const size_t digits = size_t(q - start);
+        const uint8_t hs = uint8_t(digits / 2);
+        if (digits % 2 != 0 || hs < 1 || hs > 3 || (hash_size && hs != hash_size) ||
+            size_t(hops + 1) * hs > sizeof(buf)) {
+          ok = false;
+          break;
         }
-        while (*p && *p != ',') ++p;
+        hash_size = hs;
+        char tmp[8] = {0};
+        memcpy(tmp, start, digits);
+        ok = AppStore::hexToBytes(tmp, &buf[hops * hs], hs);
+        if (ok) ++hops;
       }
-      peer.out_path_len = count;
+      if (!ok || hops == 0) {
+        snprintf(self->_store.status().trace_status, sizeof(self->_store.status().trace_status),
+                 "Path: hex hops like C3,D4 (or C3A1,D4B2)");
+        self->renderBody();
+        return;
+      }
+      peer.out_path_len = ContactRecord::encodePathLen(hash_size, hops);
+      memset(peer.out_path, 0, sizeof(peer.out_path));
+      memcpy(peer.out_path, buf, size_t(hops) * hash_size);
+      self->_actions.addOrUpdateContact(peer);
+      snprintf(self->_store.status().trace_status, sizeof(self->_store.status().trace_status),
+               "Custom path set: %u hops", unsigned(hops));
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* spl = lv_label_create(sp_btn);
@@ -2762,8 +2830,7 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(b_fld, p.warning, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(b_fld, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
-      auto& peer = self->_store.contactsMutable()[self->_selected_contact_idx];
-      peer.out_path_len = 0xFF;
+      const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
       self->_actions.resetContactPath(peer.pub_key);
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
@@ -2778,8 +2845,9 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     Theme::styleTouchButton(b_dir, p.success, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(b_dir, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
-      auto& peer = self->_store.contactsMutable()[self->_selected_contact_idx];
-      peer.out_path_len = 0;
+      ContactRecord peer = self->_store.contacts()[self->_selected_contact_idx];
+      peer.out_path_len = 0;  // direct neighbour, no repeater in between
+      self->_actions.addOrUpdateContact(peer);
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* l_dir = lv_label_create(b_dir);
@@ -2824,13 +2892,25 @@ void App::buildContactDetailView(lv_obj_t* parent) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       const auto& peer = self->_store.contacts()[self->_selected_contact_idx];
       uint32_t tag = 0;
-      self->_actions.sendTracePath(peer.pub_key, tag);
-      self->showScreen(ScreenId::TracePath);
+      if (self->_actions.sendTracePath(peer.pub_key, tag)) {
+        self->showScreen(ScreenId::TracePath);
+      } else {
+        self->renderBody();  // trace_status says why
+      }
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* l_trc = lv_label_create(b_trc);
     lv_obj_set_style_text_font(l_trc, &faro_font_12, 0);
     lv_label_set_text(l_trc, "Trace");
     lv_obj_center(l_trc);
+
+    lv_obj_t* tst = lv_label_create(pcard);
+    lv_obj_set_pos(tst, 0, 84);
+    lv_obj_set_width(tst, 294);
+    lv_label_set_long_mode(tst, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_font(tst, &faro_font_12, 0);
+    lv_obj_set_style_text_color(tst, p.text_secondary, 0);
+    lv_label_set_text(tst, _store.status().trace_status[0] ? _store.status().trace_status
+                                                           : "Find = path discovery, Trace = SNR per hop");
     return;
   }
 
@@ -3001,16 +3081,33 @@ void App::buildTracePathView(lv_obj_t* parent) {
   lv_obj_t* sum = lv_label_create(card);
   lv_obj_set_style_text_font(sum, &faro_font_14, 0);
   lv_obj_set_style_text_color(sum, p.accent, 0);
-  lv_label_set_text_fmt(sum, "Trace Tag #%u — %u Hops Verified",
-                        unsigned(tr_res.tag), unsigned(tr_res.hop_count));
+  if (tr_res.valid) {
+    lv_label_set_text_fmt(sum, "Trace #%u: back over %u hops", unsigned(tr_res.tag), unsigned(tr_res.hop_count));
+  } else {
+    lv_label_set_text(sum, _store.status().trace_status[0] ? _store.status().trace_status : "No trace yet");
+  }
 
-  for (uint8_t i = 0; i < tr_res.hop_count && i < 8; ++i) {
+  // Each hop: the repeater (first key byte) and the SNR it heard the previous sender with
+  for (uint8_t i = 0; tr_res.valid && i < tr_res.hop_count && i < 7; ++i) {
     lv_obj_t* hl = lv_label_create(card);
     lv_obj_set_style_text_font(hl, &faro_font_mono_12, 0);
     lv_obj_set_style_text_color(hl, p.text_primary, 0);
-    int snr_db = int(tr_res.hops[i].snr_q4) / 4;
-    lv_label_set_text_fmt(hl, "Hop %u: Node [0x%02X] ---> SNR %+d dB",
-                          unsigned(i + 1), unsigned(tr_res.hops[i].hash), snr_db);
+    const ContactRecord* rep = nullptr;
+    for (size_t k = 0; k < AppStore::kMaxContacts && !rep; ++k) {
+      const auto& c = _store.contacts()[k];
+      if (c.valid && c.pub_key[0] == tr_res.hops[i].hash &&
+          (c.role == NodeRole::Repeater || c.role == NodeRole::RoomServer)) {
+        rep = &c;
+      }
+    }
+    lv_label_set_text_fmt(hl, "%u: [%02X] %-12.12s SNR %+d dB", unsigned(i + 1), unsigned(tr_res.hops[i].hash),
+                          rep ? rep->name : "", int(tr_res.hops[i].snr_q4) / 4);
+  }
+  if (tr_res.valid) {
+    lv_obj_t* fl = lv_label_create(card);
+    lv_obj_set_style_text_font(fl, &faro_font_mono_12, 0);
+    lv_obj_set_style_text_color(fl, p.success, 0);
+    lv_label_set_text_fmt(fl, "Back to me: SNR %+d dB", int(tr_res.final_snr_q4) / 4);
   }
 }
 
@@ -4530,7 +4627,7 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
     for (size_t k = 0; k < node_cnt; ++k) {
       const auto& c = _store.contacts()[valid_indices[k]];
       double angle = double(k) * (2.0 * 3.14159265358979323846 / double(node_cnt > 0 ? node_cnt : 1)) - 1.2;
-      bool is_inner = (c.role == NodeRole::Repeater || c.out_path_len <= 1);
+      bool is_inner = (c.role == NodeRole::Repeater || (c.hasPath() && c.pathHops() <= 1));
       double rad = is_inner ? 32.0 : 58.0;
       int nx = kCx + int(rad * cos(angle));
       int ny = kCy + int(rad * sin(angle));

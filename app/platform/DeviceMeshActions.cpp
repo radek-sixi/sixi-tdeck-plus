@@ -236,9 +236,7 @@ void DeviceMeshActions::syncStore() {
     c.role = static_cast<NodeRole>(ci.type);
     c.flags = ci.flags;
     c.out_path_len = ci.out_path_len;
-    if (ci.out_path_len < 64) {
-      memcpy(c.out_path, ci.out_path, ci.out_path_len);
-    }
+    memcpy(c.out_path, ci.out_path, c.pathByteLen());
     c.last_advert_ts = ci.last_advert_timestamp;
     c.lastmod_ts = ci.lastmod;
     c.gps_lat_e6 = ci.gps_lat;
@@ -360,6 +358,16 @@ void DeviceMeshActions::pollTelemetry(uint32_t now_ms, uint16_t batt_mv, uint8_t
 
   // Radio settings changed by the phone app / a TCP client since the last check
   checkExternalRadioChange("app");
+
+  // Expire unanswered requests
+  for (auto& p : _pending) {
+    if (p.used && int32_t(now_ms - p.expires_ms) > 0) {
+      p.used = false;
+      snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply),
+               "[TIMEOUT] no answer to the last request");
+      _store.bumpVersion();
+    }
+  }
 }
 
 bool DeviceMeshActions::resendDirectMessage(uint32_t msg_id) {
@@ -465,18 +473,31 @@ bool DeviceMeshActions::sendFloodAdvert() {
 }
 
 bool DeviceMeshActions::addOrUpdateContact(const ContactRecord& contact) {
-  ContactInfo ci{};
-  memcpy(ci.id.pub_key, contact.pub_key, 32);
-  strncpy(ci.name, contact.name, sizeof(ci.name) - 1);
-  ci.type = uint8_t(contact.role);
-  ci.flags = contact.flags;
-  ci.out_path_len = contact.out_path_len;
-  if (contact.out_path_len < 64) {
-    memcpy(ci.out_path, contact.out_path, contact.out_path_len);
+  // Like upstream CMD_ADD_UPDATE_CONTACT: update in place (addContact() always takes a new slot)
+  ContactInfo* existing = the_mesh.lookupContactByPubKey(contact.pub_key, PUB_KEY_SIZE);
+  if (existing) {
+    if (contact.name[0]) strncpy(existing->name, contact.name, sizeof(existing->name) - 1);
+    existing->out_path_len = contact.out_path_len;
+    memset(existing->out_path, 0, sizeof(existing->out_path));
+    memcpy(existing->out_path, contact.out_path, contact.pathByteLen());
+    if (contact.gps_lat_e6 != 0 || contact.gps_lon_e6 != 0) {
+      existing->gps_lat = contact.gps_lat_e6;
+      existing->gps_lon = contact.gps_lon_e6;
+    }
+    existing->lastmod = the_mesh.getRTCClock()->getCurrentTime();
+  } else {
+    ContactInfo ci{};
+    memcpy(ci.id.pub_key, contact.pub_key, 32);
+    strncpy(ci.name, contact.name, sizeof(ci.name) - 1);
+    ci.type = uint8_t(contact.role);
+    ci.flags = contact.flags;
+    ci.out_path_len = contact.out_path_len;
+    memcpy(ci.out_path, contact.out_path, contact.pathByteLen());
+    ci.gps_lat = contact.gps_lat_e6;
+    ci.gps_lon = contact.gps_lon_e6;
+    ci.lastmod = the_mesh.getRTCClock()->getCurrentTime();
+    if (!the_mesh.addContact(ci)) return false;  // table full
   }
-  ci.gps_lat = contact.gps_lat_e6;
-  ci.gps_lon = contact.gps_lon_e6;
-  the_mesh.addContact(ci);
   ::store.saveContacts(&the_mesh);
   return _store.upsertContact(contact) != nullptr;
 }
@@ -598,20 +619,122 @@ bool DeviceMeshActions::removeChannel(uint8_t channel_index) {
   return _store.removeChannel(channel_index);
 }
 
+// A MeshCore TRACE along the contact's known path and back (like the app's trace): every repeater on the
+// way appends the SNR it heard; the packet comes back to us once all listed hops are used.
 bool DeviceMeshActions::sendTracePath(const uint8_t target_pubkey[32], uint32_t& out_tag) {
+  SystemStatus& st = _store.status();
   if (!target_pubkey) return false;
   ContactInfo* ci = the_mesh.lookupContactByPubKey(target_pubkey, PUB_KEY_SIZE);
   if (!ci) return false;
-  uint32_t est_timeout = 0;
-  return the_mesh.sendRequest(*ci, REQ_TYPE_GET_STATUS, out_tag, est_timeout) != MSG_SEND_FAILED;
+  if (ci->out_path_len == OUT_PATH_UNKNOWN) {
+    snprintf(st.trace_status, sizeof(st.trace_status), "No known path: use Find first");
+    _store.bumpVersion();
+    return false;
+  }
+  const bool target_repeats = ci->type == ADV_TYPE_REPEATER || ci->type == ADV_TYPE_ROOM;
+  uint8_t path[64] = {0};
+  uint8_t flags = 0;
+  const size_t len = AppStore::buildTracePath(ci->out_path, ci->out_path_len, ci->id.pub_key, target_repeats, path,
+                                              sizeof(path), flags);
+  const size_t trace_sz = size_t(1) << (flags & 3);
+  if (len == 0) {
+    snprintf(st.trace_status, sizeof(st.trace_status), "Direct neighbour that does not repeat: nothing to trace");
+    _store.bumpVersion();
+    return false;
+  }
+  uint32_t tag = 0;
+  the_mesh.getRNG()->random(reinterpret_cast<uint8_t*>(&tag), sizeof(tag));
+  mesh::Packet* pkt = the_mesh.createTrace(tag, 0, flags);
+  if (!pkt) return false;
+  the_mesh.sendDirect(pkt, path, uint8_t(len));
+  out_tag = tag;
+  TraceResult& last = _store.lastTrace();
+  last = TraceResult{};
+  last.tag = tag;
+  snprintf(st.trace_status, sizeof(st.trace_status), "Trace #%u sent over %u hops, waiting...", unsigned(tag),
+           unsigned(len / trace_sz));
+  _store.status().tx_packets++;
+  _store.status().direct_tx++;
+  _store.bumpVersion();
+  return true;
+}
+
+void DeviceMeshActions::notePending(RemoteRequestKind kind, const uint8_t pub_key[32], uint32_t tag,
+                                    uint32_t est_timeout) {
+  const uint32_t now = millis();
+  PendingRequest* slot = &_pending[0];
+  for (auto& p : _pending) {
+    if (!p.used) { slot = &p; break; }
+    if (int32_t(p.expires_ms - slot->expires_ms) < 0) slot = &p;  // reuse the one expiring first
+  }
+  uint32_t wait = est_timeout * 2;
+  if (wait < 15000) wait = 15000;
+  if (wait > 120000) wait = 120000;
+  slot->kind = kind;
+  memcpy(slot->prefix, pub_key, sizeof(slot->prefix));
+  slot->tag = tag;
+  slot->expires_ms = now + wait;
+  slot->used = true;
+}
+
+bool DeviceMeshActions::sendTrackedRequest(RemoteRequestKind kind, const uint8_t pub_key[32], const uint8_t* req,
+                                           uint8_t req_len, bool force_flood) {
+  if (!pub_key || !req || req_len == 0) return false;
+  ContactInfo* ci = the_mesh.lookupContactByPubKey(pub_key, PUB_KEY_SIZE);
+  if (!ci) return false;
+  const uint8_t saved_path = ci->out_path_len;
+  if (force_flood) ci->out_path_len = OUT_PATH_UNKNOWN;
+  uint32_t tag = 0, est_timeout = 0;
+  const int res = (req_len == 1) ? the_mesh.sendRequest(*ci, req[0], tag, est_timeout)
+                                 : the_mesh.sendRequest(*ci, req, req_len, tag, est_timeout);
+  if (force_flood) ci->out_path_len = saved_path;
+  static const char* const kNames[] = {"REQ", "LOGIN", "STATUS", "TELEMETRY", "NEIGHBOURS", "ACL", "MIN/MAX/AVG", "PATH"};
+  const char* name = kNames[size_t(kind) < sizeof(kNames) / sizeof(kNames[0]) ? size_t(kind) : 0];
+  if (res == MSG_SEND_FAILED) {
+    snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply), "[%s] send failed", name);
+    _store.bumpVersion();
+    return false;
+  }
+  notePending(kind, pub_key, tag, est_timeout);
+  snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply),
+           "[%s] sent (%s), waiting for %.20s...", name, res == MSG_SEND_SENT_FLOOD ? "flood" : "direct", ci->name);
+  _store.status().tx_packets++;
+  if (res == MSG_SEND_SENT_FLOOD) _store.status().flood_tx++; else _store.status().direct_tx++;
+  _store.bumpVersion();
+  return true;
+}
+
+bool DeviceMeshActions::claimResponse(const ContactInfo& contact, uint32_t tag, const uint8_t* data, uint8_t len) {
+  const uint32_t now = millis();
+  for (auto& p : _pending) {
+    if (!p.used || int32_t(now - p.expires_ms) > 0) continue;
+    if (memcmp(p.prefix, contact.id.pub_key, sizeof(p.prefix)) != 0) continue;
+    // Login answers carry the server's clock instead of our tag
+    if (p.kind != RemoteRequestKind::Login && p.tag != tag) continue;
+    MeshEvent ev{};
+    ev.type = MeshEventType::RemoteResponse;
+    ev.resp_kind = uint8_t(p.kind);
+    memcpy(ev.pub_key, contact.id.pub_key, 32);
+    strncpy(ev.name, contact.name, sizeof(ev.name) - 1);
+    ev.snr_q4 = int8_t(radio_driver.getLastSNR() * 4);
+    ev.rssi = int16_t(radio_driver.getLastRSSI());
+    ev.data_len = uint8_t(len < sizeof(ev.text) ? len : sizeof(ev.text));
+    if (data) memcpy(ev.text, data, ev.data_len);
+    ev.path_len = contact.out_path_len;  // a flood answer also teaches MeshCore a path
+    if (contact.out_path_len != OUT_PATH_UNKNOWN) {
+      const unsigned bytes = unsigned(contact.out_path_len & 63) * ((contact.out_path_len >> 6) + 1);
+      memcpy(ev.path, contact.out_path, bytes < sizeof(ev.path) ? bytes : sizeof(ev.path));
+    }
+    p.used = false;
+    _bus.push(ev);
+    return true;
+  }
+  return false;
 }
 
 bool DeviceMeshActions::requestTelemetry(const uint8_t target_pubkey[32]) {
-  if (!target_pubkey) return false;
-  ContactInfo* ci = the_mesh.lookupContactByPubKey(target_pubkey, PUB_KEY_SIZE);
-  if (!ci) return false;
-  uint32_t tag = 0, est_timeout = 0;
-  return the_mesh.sendRequest(*ci, REQ_TYPE_GET_TELEMETRY_DATA, tag, est_timeout) != MSG_SEND_FAILED;
+  const uint8_t req[1] = {REQ_TYPE_GET_TELEMETRY_DATA};
+  return sendTrackedRequest(RemoteRequestKind::Telemetry, target_pubkey, req, sizeof(req), false);
 }
 
 bool DeviceMeshActions::setRadioConfig(const RadioConfig& cfg) {
@@ -971,27 +1094,54 @@ bool DeviceMeshActions::sendRemoteLogin(const uint8_t target_pubkey[32], const c
   if (!ci) return false;
   uint32_t est_timeout = 0;
   int res = the_mesh.sendLogin(*ci, password, est_timeout);
+  if (res != MSG_SEND_FAILED) notePending(RemoteRequestKind::Login, target_pubkey, 0, est_timeout);
+  _store.status().remote_logged_in = false;
   snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply),
-           "[LOGIN] %s (timeout=%ums)", (res == MSG_SEND_FAILED) ? "Failed" : "Sent", unsigned(est_timeout));
+           "[LOGIN] %s, waiting for %.20s...", (res == MSG_SEND_FAILED) ? "send failed" : "sent", ci->name);
   _store.bumpVersion();
   return res != MSG_SEND_FAILED;
 }
 
 bool DeviceMeshActions::sendRemoteLogout(const uint8_t target_pubkey[32]) {
   if (!target_pubkey) return false;
+  // MeshCore keeps no keep-alive session for logins made from the device (startConnection is internal),
+  // so a logout only forgets the local state; the server's ACL entry is unchanged.
   _store.status().remote_logged_in = false;
   snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply),
-           "[LOGOUT] Disconnected admin session.");
+           "[LOGOUT] Local session closed.");
   _store.bumpVersion();
   return true;
 }
 
 bool DeviceMeshActions::requestRemoteStatus(const uint8_t target_pubkey[32]) {
-  if (!target_pubkey) return false;
-  ContactInfo* ci = the_mesh.lookupContactByPubKey(target_pubkey, PUB_KEY_SIZE);
-  if (!ci) return false;
-  uint32_t tag = 0, est_timeout = 0;
-  return the_mesh.sendRequest(*ci, REQ_TYPE_GET_STATUS, tag, est_timeout) != MSG_SEND_FAILED;
+  const uint8_t req[1] = {REQ_TYPE_GET_STATUS};
+  return sendTrackedRequest(RemoteRequestKind::Status, target_pubkey, req, sizeof(req), false);
+}
+
+bool DeviceMeshActions::requestRemoteBinary(const uint8_t target_pubkey[32], const char* subcmd) {
+  if (!target_pubkey || !subcmd) return false;
+  uint8_t req[11] = {0};
+  if (strncmp(subcmd, "acl", 3) == 0) {
+    req[0] = 0x05;  // REQ_TYPE_GET_ACCESS_LIST (admin only), two reserved bytes
+    return sendTrackedRequest(RemoteRequestKind::Acl, target_pubkey, req, 3, false);
+  }
+  if (strncmp(subcmd, "mma", 3) == 0) {
+    req[0] = 0x04;  // REQ_TYPE_GET_AVG_MIN_MAX (sensors): last hour
+    const uint32_t start_secs_ago = 3600, end_secs_ago = 0;
+    memcpy(&req[1], &start_secs_ago, 4);
+    memcpy(&req[5], &end_secs_ago, 4);
+    return sendTrackedRequest(RemoteRequestKind::MinMaxAvg, target_pubkey, req, 11, false);
+  }
+  // REQ_TYPE_GET_NEIGHBOURS v0: 8 entries from offset 0, strongest first, 4-byte key prefixes
+  req[0] = 0x06;
+  req[1] = 0;
+  req[2] = 8;
+  req[3] = 0;
+  req[4] = 0;
+  req[5] = 2;
+  req[6] = 4;
+  the_mesh.getRNG()->random(&req[7], 4);  // keeps the packet hash unique
+  return sendTrackedRequest(RemoteRequestKind::Neighbours, target_pubkey, req, 11, false);
 }
 
 bool DeviceMeshActions::sendRemoteCli(const uint8_t target_pubkey[32], const char* cli_cmd) {
@@ -999,10 +1149,11 @@ bool DeviceMeshActions::sendRemoteCli(const uint8_t target_pubkey[32], const cha
   ContactInfo* ci = the_mesh.lookupContactByPubKey(target_pubkey, PUB_KEY_SIZE);
   if (!ci) return false;
   uint32_t ts = the_mesh.getRTCClock()->getCurrentTime();
-  uint32_t crc = 0, est_timeout = 0;
-  int res = the_mesh.sendMessage(*ci, ts, 1 /* TXT_TYPE_CLI_DATA */, cli_cmd, crc, est_timeout);
+  uint32_t est_timeout = 0;
+  // TXT_TYPE_CLI_DATA: the server answers with a CLI reply (shown in the admin log), no ACK
+  int res = the_mesh.sendCommandData(*ci, ts, 0, 1 /* TXT_TYPE_CLI_DATA */, cli_cmd, est_timeout);
   snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply),
-           "[REMOTE CLI] > %s (%s)", cli_cmd, (res == MSG_SEND_FAILED) ? "ERR" : "Sent");
+           "[REMOTE CLI] > %s (%s)", cli_cmd, (res == MSG_SEND_FAILED) ? "send failed" : "sent, waiting...");
   _store.bumpVersion();
   return res != MSG_SEND_FAILED;
 }
@@ -1015,15 +1166,161 @@ bool DeviceMeshActions::shareContactZeroHop(const uint8_t target_pubkey[32]) {
 }
 
 bool DeviceMeshActions::findPath(const uint8_t target_pubkey[32]) {
+  // Like upstream path discovery: a flooded telemetry request (base telemetry only) whose answer
+  // comes back along a path that MeshCore stores for the contact
+  uint8_t req[9] = {0};
+  req[0] = REQ_TYPE_GET_TELEMETRY_DATA;
+  req[1] = uint8_t(~0x01);  // inverse permission mask: only TELEM_PERM_BASE
+  the_mesh.getRNG()->random(&req[5], 4);
+  return sendTrackedRequest(RemoteRequestKind::PathDiscovery, target_pubkey, req, sizeof(req), true);
+}
+
+bool DeviceMeshActions::scanNearbyNodes() {
+  // Zero-hop discover request, as upstream's on-device UI does it (prefix-only answers from all node types)
+  uint8_t cmd[6];
+  cmd[0] = 0x80 | 1;  // CTL_TYPE_NODE_DISCOVER_REQ | prefix only
+  cmd[1] = 0xFF;      // every node type
+  the_mesh.getRNG()->random(reinterpret_cast<uint8_t*>(&_discover_tag), 4);
+  memcpy(&cmd[2], &_discover_tag, 4);
+  mesh::Packet* req = the_mesh.createControlData(cmd, sizeof(cmd));
+  if (!req) return false;
+  the_mesh.sendZeroHop(req);
+  _discover_until_ms = millis() + 30000;
+  _store.clearDiscovered();
+  _store.status().tx_packets++;
+  _store.status().direct_tx++;
+  return true;
+}
+
+void DeviceMeshActions::onControlData(const mesh::Packet* pkt) {
+  if (!pkt || pkt->payload_len < 14 || (pkt->payload[0] & 0xF0) != 0x90) return;  // CTL_TYPE_NODE_DISCOVER_RESP
+  if (_discover_tag == 0 || int32_t(millis() - _discover_until_ms) > 0) return;
+  uint32_t tag = 0;
+  memcpy(&tag, &pkt->payload[2], 4);
+  if (tag != _discover_tag) return;
+  MeshEvent ev{};
+  ev.type = MeshEventType::NodeDiscovered;
+  memcpy(ev.pub_key, &pkt->payload[6], 8);
+  ev.role = static_cast<NodeRole>(pkt->payload[0] & 0x0F);
+  ev.snr2_q4 = int8_t(pkt->payload[1]);
+  ev.snr_q4 = int8_t(radio_driver.getLastSNR() * 4);
+  ev.rssi = int16_t(radio_driver.getLastRSSI());
+  if (ContactInfo* c = the_mesh.lookupContactByPubKey(&pkt->payload[6], 8)) {
+    strncpy(ev.name, c->name, sizeof(ev.name) - 1);
+  }
+  _bus.push(ev);
+}
+
+bool DeviceMeshActions::useLastAdvertPath(const uint8_t target_pubkey[32]) {
   if (!target_pubkey) return false;
   ContactInfo* ci = the_mesh.lookupContactByPubKey(target_pubkey, PUB_KEY_SIZE);
   if (!ci) return false;
-  uint8_t save = ci->out_path_len;
-  ci->out_path_len = OUT_PATH_UNKNOWN;
-  uint32_t tag = 0, est_timeout = 0;
-  int res = the_mesh.sendRequest(*ci, REQ_TYPE_GET_TELEMETRY_DATA, tag, est_timeout);
-  ci->out_path_len = save;
-  return res != MSG_SEND_FAILED;
+  AdvertPath recent[16];  // ~1.7 KB on the loop stack (16 KB), only while the button runs
+  const int n = the_mesh.getRecentlyHeard(recent, 16);
+  for (int i = 0; i < n; ++i) {
+    if (memcmp(recent[i].pubkey_prefix, target_pubkey, sizeof(recent[i].pubkey_prefix)) != 0) continue;
+    ci->out_path_len = mesh::Packet::copyPath(ci->out_path, recent[i].path, recent[i].path_len);
+    ci->lastmod = the_mesh.getRTCClock()->getCurrentTime();
+    ::store.saveContacts(&the_mesh);
+    if (ContactRecord* cr = _store.findContactByPubKeyMutable(target_pubkey)) {
+      cr->out_path_len = ci->out_path_len;
+      memset(cr->out_path, 0, sizeof(cr->out_path));
+      memcpy(cr->out_path, ci->out_path, cr->pathByteLen());
+    }
+    snprintf(_store.status().trace_status, sizeof(_store.status().trace_status), "Path from last advert: %u hops",
+             unsigned(ci->out_path_len & 63));
+    _store.bumpVersion();
+    return true;
+  }
+  snprintf(_store.status().trace_status, sizeof(_store.status().trace_status), "No recent advert from this node");
+  _store.bumpVersion();
+  return false;
+}
+
+bool DeviceMeshActions::exportContactUri(const uint8_t target_pubkey[32], char* out_uri, size_t max_len) {
+  if (!target_pubkey) return false;
+  const ContactRecord* c = _store.findContactByPubKey(target_pubkey);
+  char uri[220] = {0};
+  if (!c || !AppStore::formatContactUri(*c, uri, sizeof(uri))) return false;
+  strncpy(_store.uiPrefs().clipboard, uri, sizeof(_store.uiPrefs().clipboard) - 1);
+  _store.uiPrefs().clipboard[sizeof(_store.uiPrefs().clipboard) - 1] = '\0';
+  if (out_uri && max_len > 0) {
+    strncpy(out_uri, uri, max_len - 1);
+    out_uri[max_len - 1] = '\0';
+  }
+  snprintf(_store.status().export_status, sizeof(_store.status().export_status), "Contact URI in clipboard");
+  _store.bumpVersion();
+  return true;
+}
+
+bool DeviceMeshActions::importContactUri(const char* uri_or_hex) {
+  if (!uri_or_hex || !uri_or_hex[0]) return false;
+  ContactRecord c{};
+  if (AppStore::parseContactUri(uri_or_hex, c)) {
+    return addOrUpdateContact(c);
+  }
+  ChannelRecord ch{};
+  if (AppStore::parseChannelUri(uri_or_hex, ch)) {
+    return addChannel(ch.name, ch.secret, ch.secret_len);
+  }
+  // meshcore://<hex>: an exported (signed) advert, as the phone app's "export contact" produces
+  const char* hex = strncmp(uri_or_hex, "meshcore://", 11) == 0 ? uri_or_hex + 11 : uri_or_hex;
+  const size_t hlen = strlen(hex);
+  uint8_t buf[MAX_TRANS_UNIT];
+  if (hlen < 2 * (32 + 64) || (hlen % 2) != 0 || hlen / 2 > sizeof(buf)) return false;
+  if (!AppStore::hexToBytes(hex, buf, hlen / 2)) return false;
+  if (!the_mesh.importContact(buf, uint8_t(hlen / 2))) return false;
+  snprintf(_store.status().export_status, sizeof(_store.status().export_status), "Advert imported");
+  _store.bumpVersion();
+  return true;  // the advert is processed in the next mesh loop; the contact then arrives as an event
+}
+
+bool DeviceMeshActions::getCustomVars(char* out_vars, size_t max_len) {
+  auto& st = _store.status();
+  st.custom_vars_str[0] = '\0';
+  if (_sensors) {
+    size_t pos = 0;
+    for (int i = 0; i < _sensors->getNumSettings() && pos + 2 < sizeof(st.custom_vars_str); ++i) {
+      const char* n = _sensors->getSettingName(i);
+      const char* v = _sensors->getSettingValue(i);
+      int w = snprintf(st.custom_vars_str + pos, sizeof(st.custom_vars_str) - pos, "%s%s:%s", i ? "," : "",
+                       n ? n : "?", v ? v : "");
+      if (w <= 0) break;
+      pos += size_t(w);
+    }
+  }
+  if (out_vars && max_len > 0) {
+    strncpy(out_vars, st.custom_vars_str, max_len - 1);
+    out_vars[max_len - 1] = '\0';
+  }
+  _store.bumpVersion();
+  return _sensors != nullptr;
+}
+
+bool DeviceMeshActions::setCustomVar(const char* key_val) {
+  if (!_sensors || !key_val) return false;
+  char kv[96];
+  strncpy(kv, key_val, sizeof(kv) - 1);
+  kv[sizeof(kv) - 1] = '\0';
+  char* sep = strchr(kv, ':');
+  if (!sep) return false;
+  *sep++ = '\0';
+  if (!_sensors->setSettingValue(kv, sep)) return false;
+#if ENV_INCLUDE_GPS == 1
+  // Same bookkeeping as upstream CMD_SET_CUSTOM_VAR
+  if (_prefs && strcmp(kv, "gps") == 0) {
+    _prefs->gps_enabled = (sep[0] == '1') ? 1 : 0;
+    the_mesh.savePrefs();
+    _store.gps().enabled = _prefs->gps_enabled != 0;
+  } else if (_prefs && strcmp(kv, "gps_interval") == 0) {
+    uint32_t secs = uint32_t(atoi(sep));
+    _prefs->gps_interval = secs > 86400 ? 86400 : secs;
+    the_mesh.savePrefs();
+  }
+#endif
+  char dummy[8];
+  getCustomVars(dummy, sizeof(dummy));
+  return true;
 }
 
 bool DeviceMeshActions::syncDeviceTime(uint32_t unix_ts) {

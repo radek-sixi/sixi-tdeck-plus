@@ -66,6 +66,7 @@ public:
   bool exportSettingsToSd(bool overwrite = true) override;
   bool importSettingsFromSd() override;
   bool setRegion(core::RadioRegionId id) override;
+  bool scanNearbyNodes() override;
 
   uint32_t zeroHopAdvertsSent() const { return _zero_hop_adverts; }
   uint32_t floodAdvertsSent() const { return _flood_adverts; }

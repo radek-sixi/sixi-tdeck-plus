@@ -474,44 +474,29 @@ void CompanionClientMeshActions::handleIncomingFrame(const uint8_t* data, size_t
     }
 
     case PUSH_CODE_LOGIN_SUCCESS: {
-      _store.status().remote_logged_in = true;
-      snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply),
-               "[LOGIN OK] Session established with remote node.");
-      _store.bumpVersion();
+      // [code][permissions][prefix 6]...
+      const ContactRecord* c = (len >= 8) ? _store.findContactByPrefix(&data[2]) : nullptr;
+      const uint8_t ok[3] = {0, 0, uint8_t(len >= 2 ? data[1] : 0)};
+      _store.applyRemoteResponse(RemoteRequestKind::Login, c ? c->pub_key : nullptr, ok, sizeof(ok));
       break;
     }
 
-    case PUSH_CODE_STATUS_RESPONSE: {
-      if (len >= 12) {
-        uint16_t bmv = readU16LE(&data[7]);
-        snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply),
-                 "[STATUS] Batt: %umV | Queue: %u | RSSI: %ddBm | SNR: %+ddB",
-                 unsigned(bmv), unsigned(readU16LE(&data[9])),
-                 int(int16_t(readU16LE(&data[11]))),
-                 len >= 15 ? int(int8_t(data[14])) / 4 : 0);
-      } else {
-        snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply),
-                 "[STATUS] Received %zu B response from repeater/room.", len);
-      }
-      _store.bumpVersion();
-      break;
-    }
-
+    case PUSH_CODE_STATUS_RESPONSE:
     case PUSH_CODE_TELEMETRY_RESPONSE: {
-      ContactRecord* c = (len >= 7) ? _store.findContactByPrefixMutable(&data[1]) : nullptr;
-      if (c) {
-        c->online = true;
+      // [code][reserved][prefix 6][payload]
+      if (len >= 8) {
+        const ContactRecord* c = _store.findContactByPrefix(&data[2]);
+        _store.applyRemoteResponse(code == PUSH_CODE_STATUS_RESPONSE ? RemoteRequestKind::Status
+                                                                     : RemoteRequestKind::Telemetry,
+                                   c ? c->pub_key : nullptr, &data[8], len - 8);
       }
-      snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply),
-               "[TELEMETRY] Node is ONLINE (%zu B CayenneLPP telemetry received).", len);
-      _store.bumpVersion();
       break;
     }
 
     case PUSH_CODE_BINARY_RESPONSE: {
-      snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply),
-               "[BINARY RESP] Received %zu B (Neighbors / ACL / MMA data).", len);
-      _store.bumpVersion();
+      // [code][reserved][tag 4][payload]
+      if (len >= 6) _store.applyRemoteResponse(_binary_kind, nullptr, &data[6], len - 6);
+      _binary_kind = RemoteRequestKind::None;
       break;
     }
 
@@ -557,20 +542,23 @@ void CompanionClientMeshActions::handleIncomingFrame(const uint8_t* data, size_t
     }
 
     case PUSH_CODE_TRACE_DATA: {
+      // [code][res][path bytes][flags][tag][auth][hashes][one SNR per hop][final SNR]
       if (len >= 12) {
-        uint8_t plen = data[2];
-        if (plen > 16) plen = 16;
-        if (len >= size_t(12 + plen * 2)) {
+        const uint8_t path_bytes = data[2];
+        const uint8_t sz = data[3] & 0x03;
+        const uint8_t hops = uint8_t(path_bytes >> sz);
+        if (len >= size_t(12 + path_bytes + hops + 1)) {
           MeshEvent ev{};
           ev.type = MeshEventType::TraceRecv;
-          ev.trace.hop_count = plen;
+          ev.trace.hop_count = hops > 16 ? 16 : hops;
           ev.trace.flags = data[3];
           ev.trace.tag = readU32LE(&data[4]);
           ev.trace.auth_code = readU32LE(&data[8]);
-          for (uint8_t i = 0; i < plen; ++i) {
-            ev.trace.hops[i].hash = data[12 + i];
-            ev.trace.hops[i].snr_q4 = int8_t(data[12 + plen + i]);
+          for (uint8_t i = 0; i < ev.trace.hop_count; ++i) {
+            ev.trace.hops[i].hash = data[12 + (size_t(i) << sz)];
+            ev.trace.hops[i].snr_q4 = int8_t(data[12 + path_bytes + i]);
           }
+          ev.trace.final_snr_q4 = int8_t(data[12 + path_bytes + hops]);
           ev.trace.valid = true;
           _bus.push(ev);
         }
@@ -713,14 +701,30 @@ bool CompanionClientMeshActions::removeChannel(uint8_t channel_index) {
 
 bool CompanionClientMeshActions::sendTracePath(const uint8_t target_pubkey[32], uint32_t& out_tag) {
   if (!target_pubkey) return false;
+  const ContactRecord* c = _store.findContactByPubKey(target_pubkey);
+  if (!c) return false;
+  uint8_t path[64] = {0};
+  uint8_t flags = 0;
+  const bool repeats = c->role == NodeRole::Repeater || c->role == NodeRole::RoomServer;
+  const size_t len = AppStore::buildTracePath(c->out_path, c->out_path_len, c->pub_key, repeats, path, sizeof(path), flags);
+  if (len == 0) {
+    snprintf(_store.status().trace_status, sizeof(_store.status().trace_status),
+             c->hasPath() ? "Direct neighbour that does not repeat" : "No known path: use Find first");
+    _store.bumpVersion();
+    return false;
+  }
   out_tag = ++_trace_seq;
-  uint8_t pkt[11];
+  std::vector<uint8_t> pkt(10 + len);
   pkt[0] = CMD_SEND_TRACE_PATH;
   writeU32LE(&pkt[1], out_tag);
   writeU32LE(&pkt[5], 0);
-  pkt[9] = 0;
-  pkt[10] = target_pubkey[0];
-  return sendFrame(pkt, sizeof(pkt));
+  pkt[9] = flags;
+  memcpy(&pkt[10], path, len);
+  _store.lastTrace() = TraceResult{};
+  snprintf(_store.status().trace_status, sizeof(_store.status().trace_status), "Trace #%u sent, waiting...",
+           unsigned(out_tag));
+  _store.bumpVersion();
+  return sendFrame(pkt.data(), pkt.size());
 }
 
 bool CompanionClientMeshActions::requestTelemetry(const uint8_t target_pubkey[32]) {
@@ -896,14 +900,34 @@ bool CompanionClientMeshActions::requestRemoteStatus(const uint8_t target_pubkey
 
 bool CompanionClientMeshActions::requestRemoteBinary(const uint8_t target_pubkey[32], const char* subcmd) {
   if (!target_pubkey || !subcmd) return false;
-  uint8_t pkt[36] = {0};
+  // CMD_SEND_BINARY_REQ: [cmd][pub key 32][request]
+  uint8_t pkt[33 + 11] = {0};
   pkt[0] = CMD_SEND_BINARY_REQ;
   memcpy(&pkt[1], target_pubkey, 32);
-  pkt[33] = (strncmp(subcmd, "acl", 3) == 0) ? 2 : ((strncmp(subcmd, "mma", 3) == 0) ? 3 : 1);
+  uint8_t* req = &pkt[33];
+  size_t req_len = 0;
+  if (strncmp(subcmd, "acl", 3) == 0) {
+    req[0] = 0x05;  // REQ_TYPE_GET_ACCESS_LIST
+    req_len = 3;
+    _binary_kind = RemoteRequestKind::Acl;
+  } else if (strncmp(subcmd, "mma", 3) == 0) {
+    req[0] = 0x04;  // REQ_TYPE_GET_AVG_MIN_MAX: last hour
+    writeU32LE(&req[1], 3600);
+    req_len = 11;
+    _binary_kind = RemoteRequestKind::MinMaxAvg;
+  } else {
+    req[0] = 0x06;  // REQ_TYPE_GET_NEIGHBOURS v0: 8 entries, strongest first, 4-byte prefixes
+    req[2] = 8;
+    req[5] = 2;
+    req[6] = 4;
+    writeU32LE(&req[7], uint32_t(time(nullptr)));
+    req_len = 11;
+    _binary_kind = RemoteRequestKind::Neighbours;
+  }
   snprintf(_store.status().remote_admin_reply, sizeof(_store.status().remote_admin_reply),
            "[BINARY REQ] Sent '%s' query to remote node...", subcmd);
   _store.bumpVersion();
-  return sendFrame(pkt, sizeof(pkt));
+  return sendFrame(pkt, 33 + req_len);
 }
 
 bool CompanionClientMeshActions::sendRemoteCli(const uint8_t target_pubkey[32], const char* cli_cmd) {
@@ -1014,8 +1038,9 @@ bool CompanionClientMeshActions::useLastAdvertPath(const uint8_t target_pubkey[3
     size_t path_bytes = resp.size() - 6;
     if (path_bytes > 64) path_bytes = 64;
     if (ContactRecord* c = _store.findContactByPubKeyMutable(target_pubkey)) {
-      c->out_path_len = plen & 0x3F;
-      memcpy(c->out_path, &resp[6], path_bytes);
+      c->out_path_len = plen;  // encoded: hops + hash size
+      memset(c->out_path, 0, sizeof(c->out_path));
+      memcpy(c->out_path, &resp[6], path_bytes < c->pathByteLen() ? path_bytes : c->pathByteLen());
       addOrUpdateContact(*c);
       return true;
     }

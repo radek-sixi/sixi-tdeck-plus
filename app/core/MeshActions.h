@@ -58,52 +58,54 @@ public:
   virtual bool factoryReset() = 0;
   virtual void rebootToDfu() = 0;
 
-  // Extended MeshCore Android & Ripple UI Actions (with default implementations)
+  // Extended actions. The defaults report "not done" so a backend without them never fakes success.
   virtual bool runCliCommand(const char* cmd, char* out_reply, size_t max_len) {
     (void)cmd;
     if (out_reply && max_len > 0) out_reply[0] = '\0';
     return false;
   }
   virtual bool sendRemoteLogin(const uint8_t target_pubkey[32], const char* password) {
-    (void)target_pubkey; (void)password; return true;
+    (void)target_pubkey; (void)password; return false;
   }
   virtual bool sendRemoteLogout(const uint8_t target_pubkey[32]) {
-    (void)target_pubkey; return true;
+    (void)target_pubkey; return false;
   }
   virtual bool requestRemoteStatus(const uint8_t target_pubkey[32]) {
-    (void)target_pubkey; return true;
+    (void)target_pubkey; return false;
   }
+  // subcmd: "neighbors", "acl" or "mma"
   virtual bool requestRemoteBinary(const uint8_t target_pubkey[32], const char* subcmd) {
-    (void)target_pubkey; (void)subcmd; return true;
+    (void)target_pubkey; (void)subcmd; return false;
   }
   virtual bool sendRemoteCli(const uint8_t target_pubkey[32], const char* cli_cmd) {
-    (void)target_pubkey; (void)cli_cmd; return true;
+    (void)target_pubkey; (void)cli_cmd; return false;
   }
   virtual bool shareContactZeroHop(const uint8_t target_pubkey[32]) {
-    (void)target_pubkey; return true;
+    (void)target_pubkey; return false;
   }
   virtual bool findPath(const uint8_t target_pubkey[32]) {
-    (void)target_pubkey; return true;
+    (void)target_pubkey; return false;
   }
-  virtual bool scanNearbyNodes() { return true; }
+  // Zero-hop discover request; answers arrive as NodeDiscovered events
+  virtual bool scanNearbyNodes() { return false; }
   virtual bool syncDeviceTime(uint32_t unix_ts) {
-    (void)unix_ts; return true;
+    (void)unix_ts; return false;
   }
   virtual bool setTuningParams(float rx_delay, uint8_t interference_db, uint8_t agc_sec, bool double_ack) {
-    (void)rx_delay; (void)interference_db; (void)agc_sec; (void)double_ack; return true;
+    (void)rx_delay; (void)interference_db; (void)agc_sec; (void)double_ack; return false;
   }
   virtual bool setTelemetryPerms(uint8_t telemetry_perm, uint8_t loc_policy) {
-    (void)telemetry_perm; (void)loc_policy; return true;
+    (void)telemetry_perm; (void)loc_policy; return false;
   }
   virtual bool setAutoAddConfig(bool enabled, uint8_t max_hops) {
-    (void)enabled; (void)max_hops; return true;
+    (void)enabled; (void)max_hops; return false;
   }
   virtual bool setPathHashMode(uint8_t hash_bytes) {
-    (void)hash_bytes; return true;
+    (void)hash_bytes; return false;
   }
-  virtual bool rebootRadio() { return true; }
+  virtual bool rebootRadio() { return false; }
   virtual bool useLastAdvertPath(const uint8_t target_pubkey[32]) {
-    (void)target_pubkey; return true;
+    (void)target_pubkey; return false;
   }
   virtual bool exportContactUri(const uint8_t target_pubkey[32], char* out_uri, size_t max_len) {
     (void)target_pubkey;

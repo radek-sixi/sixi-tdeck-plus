@@ -44,6 +44,7 @@ public:
   static constexpr size_t kMaxContacts      = 64;   // active UI view / store capacity (up to 350 on device)
   static constexpr size_t kMaxChannels      = 40;
   static constexpr size_t kMaxMessages      = 256;
+  static constexpr size_t kMaxDiscovered    = 16;
   static constexpr size_t kMaxCanned        = 12;
 
   static constexpr uint32_t kDirectAckTimeoutMs = 6000;
@@ -117,6 +118,14 @@ public:
   const RadioRegion& regionInfo() const { return RegionPolicy::get(_region); }
   bool setRegion(RadioRegionId id);
 
+  // Nodes that answered our last discover request
+  size_t discoveredCount() const;
+  const DiscoveredNode* discovered() const { return _discovered; }
+  void clearDiscovered();
+
+  // Answer to a request this device sent (status, telemetry, neighbours, ACL, login)
+  void applyRemoteResponse(RemoteRequestKind kind, const uint8_t pub_key[32], const uint8_t* data, size_t len);
+
   SystemStatus& status() { return _status; }
   const SystemStatus& status() const { return _status; }
 
@@ -175,6 +184,11 @@ public:
   static bool formatChannelUri(const ChannelRecord& ch, char* out_uri, size_t max_len);
   static bool parseChannelUri(const char* uri, ChannelRecord& out_ch);
 
+  // TRACE hop list for a contact: its known path out (+ the contact itself when it repeats), then the
+  // same hops back. Returns the byte length (0 = nothing to trace); flags gets the trace hash size code.
+  static size_t buildTracePath(const uint8_t* out_path, uint8_t out_path_len, const uint8_t* target_pub,
+                               bool target_repeats, uint8_t* path, size_t cap, uint8_t& flags);
+
   static void bytesToHex(const uint8_t* bytes, size_t len, char* out_hex, size_t max_len);
   static bool hexToBytes(const char* hex, uint8_t* out_bytes, size_t expected_len);
 
@@ -201,6 +215,7 @@ private:
   GpsFix            _gps;
   RadioConfig       _radio;
   RadioRegionId     _region = RadioRegionId::EU868;
+  DiscoveredNode    _discovered[kMaxDiscovered] = {};
   SystemStatus      _status;
   UiPrefs           _ui_prefs;
   RegionRecord      _regions[kMaxRegions] = {};

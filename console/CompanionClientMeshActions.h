@@ -196,6 +196,7 @@ private:
   std::vector<uint8_t> _rx_buf;
   uint32_t _last_sent_crc = 0x1000;
   uint32_t _trace_seq = 1;
+  faro::core::RemoteRequestKind _binary_kind = faro::core::RemoteRequestKind::None;  // last CMD_SEND_BINARY_REQ
   char _last_host[64] = {0};
   uint16_t _last_port = 5000;
   uint32_t _last_reconnect_ms = 0;
