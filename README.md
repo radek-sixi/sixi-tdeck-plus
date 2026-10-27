@@ -8,7 +8,8 @@ companion firmware. It runs on the device next to the normal companion interface
   Faro attaches through upstream's `platformio.local.ini` hook and the `AbstractUITask` listener; it adds no
   companion opcodes.
 - **Licence:** Apache-2.0 (see `LICENSE`, `NOTICE`, `LICENSES/`, `docs/THIRD_PARTY.md`).
-- **Status:** 0.9.2, pre-1.0. Test it on your own hardware before relying on it.
+- **Status:** 0.10.0, pre-1.0. The latest release binaries are 0.9.2 (see `docs/FLASHING.md`); build from source
+  for 0.10.0. Test it on your own hardware before relying on it.
 
 ## Screenshots
 
@@ -25,6 +26,10 @@ companion firmware. It runs on the device next to the normal companion interface
 | Mesh graph | Diagnostics | Mesh tools | Settings |
 |---|---|---|---|
 | ![Mesh graph](docs/screenshots/diag_graph.png) | ![Diagnostics](docs/screenshots/14_diagnostics.png) | ![Mesh tools](docs/screenshots/diag_mesh.png) | ![Settings](docs/screenshots/13_settings.png) |
+
+| Radio region | Welcome (region) | Node scan | Contact path |
+|---|---|---|---|
+| ![Radio settings with the region button](docs/screenshots/settings_radio.png) | ![Welcome screen with the region choice](docs/screenshots/15_boot_wizard.png) | ![Discover with zero-hop scan answers](docs/screenshots/discover_scan.png) | ![Contact path and trace](docs/screenshots/contact_path.png) |
 
 More in [`docs/screenshots/`](docs/screenshots/).
 

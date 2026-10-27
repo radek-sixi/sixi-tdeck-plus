@@ -10,6 +10,9 @@ Release files (GitHub release `v0.9.2`):
 
 `<board>` is `tdeck` (T-Deck and T-Deck Plus), `tdeck-max`, `thinknode-m9`, `tbeam-supreme` or `heltec-v3`.
 
+The source is at 0.10.0, which has no release files yet. Radio regions and the data Faro keeps on flash (both
+below) are 0.10.0 features: build it from source (`pio run -e faro_<board>`) to get them.
+
 ## 0. Back up the device first
 
 ```bash
