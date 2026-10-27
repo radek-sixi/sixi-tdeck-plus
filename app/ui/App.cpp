@@ -110,6 +110,12 @@ lv_obj_t* createHeaderRow(lv_obj_t* parent, const char* title, bool outdoor,
   return hdr;
 }
 
+// "46.818N 8.228E" style, with the hemisphere instead of a sign
+void formatLatLon(double lat, double lon, int decimals, char* out, size_t cap) {
+  snprintf(out, cap, "%.*f%c %.*f%c", decimals, lat < 0 ? -lat : lat, lat < 0 ? 'S' : 'N', decimals,
+           lon < 0 ? -lon : lon, lon < 0 ? 'W' : 'E');
+}
+
 // Next TX power step at or below the region's ceiling (wraps to the lowest)
 int8_t nextTxPower(int8_t cur, int8_t cap) {
   static const int8_t kSteps[] = {2, 5, 9, 12, 14, 17, 20, 22};
@@ -123,6 +129,17 @@ int8_t nextTxPower(int8_t cur, int8_t cap) {
   return cap;
 }
 
+// Flood scopes offered by the Scope button
+size_t scopeNames(RadioRegionId region, const char* const** out) {
+  static const char* const kEu[] = {"*", "#eu-mesh", "#ch-alps", "offgrid"};
+  static const char* const kOther[] = {"*", "offgrid"};
+  if (region == RadioRegionId::EU868) {
+    *out = kEu;
+    return sizeof(kEu) / sizeof(kEu[0]);
+  }
+  *out = kOther;
+  return sizeof(kOther) / sizeof(kOther[0]);
+}
 }  // namespace
 
 App::App(AppStore& store, IMeshActions& actions, OfflineTileReader& tile_reader)
@@ -303,11 +320,13 @@ void App::tick(uint32_t now_ms) {
         up.deadman_triggered = true;
         const auto& g = _store.gps();
         char pos[64] = {0};
-        if (g.valid) {
+        if (g.valid && up.coord_format == 1) {
           int32_t lv_e = 0, lv_n = 0;
           geomath::wgs84ToSwissLV95(g.lat_deg, g.lon_deg, lv_e, lv_n);
           snprintf(pos, sizeof(pos), "WGS:%.4f,%.4f LV95:%d,%d",
                    g.lat_deg, g.lon_deg, int(lv_e), int(lv_n));
+        } else if (g.valid) {
+          snprintf(pos, sizeof(pos), "WGS:%.5f,%.5f", g.lat_deg, g.lon_deg);
         } else {
           snprintf(pos, sizeof(pos), "no GPS fix");  // never send a made-up position
         }
@@ -1766,7 +1785,7 @@ void App::buildChannelsView(lv_obj_t* parent) {
   const auto& p = Theme::palette(outdoor);
 
   if (_channels_subpage) {
-    createHeaderRow(parent, "Channel Setup / #ch", outdoor,
+    createHeaderRow(parent, "Channel Setup / #tag", outdoor,
                     [](lv_event_t* e) {
                       auto* self = static_cast<App*>(lv_event_get_user_data(e));
                       self->_channels_subpage = false;
@@ -1783,7 +1802,7 @@ void App::buildChannelsView(lv_obj_t* parent) {
     lv_obj_set_size(_compose_ta, 206, 28);
     lv_obj_set_pos(_compose_ta, 0, 0);
     lv_textarea_set_one_line(_compose_ta, true);
-    lv_textarea_set_placeholder_text(_compose_ta, "#ch, #alps, #eu or name...");
+    lv_textarea_set_placeholder_text(_compose_ta, "#hashtag or channel name...");
     lv_obj_set_style_text_font(_compose_ta, &faro_font_12, 0);
 
     lv_obj_t* htag_btn = lv_button_create(ccard);
@@ -1794,11 +1813,8 @@ void App::buildChannelsView(lv_obj_t* parent) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       char nm[24] = {0};
       const char* txt = self->_compose_ta ? lv_textarea_get_text(self->_compose_ta) : nullptr;
-      if (txt && txt[0]) {
-        snprintf(nm, sizeof(nm), "%s%s", txt[0] == '#' ? "" : "#", txt);
-      } else {
-        strncpy(nm, "#ch", sizeof(nm) - 1);
-      }
+      if (!txt || !txt[0]) return;  // nothing typed: no channel is made up
+      snprintf(nm, sizeof(nm), "%s%s", txt[0] == '#' ? "" : "#", txt);
       self->_actions.addHashtagChannel(nm);
       self->_channels_subpage = false;
       self->renderBody();
@@ -1808,11 +1824,12 @@ void App::buildChannelsView(lv_obj_t* parent) {
     lv_label_set_text(htl, "+ Join #Tag");
     lv_obj_center(htl);
 
-    // Quick 1-tap regional hashtag presets: [#ch] [#eu] [#alps] [#test]
-    static const char* kQuickTags[4] = {"#ch", "#eu", "#alps", "#test"};
+    // Quick 1-tap hashtag channels of the selected region
+    const char* const* kQuickTags = _store.regionInfo().quick_tags;
     struct QTagCtx { App* app; const char* tag; };
     static QTagCtx s_qtag_ctx[4];
     for (int q = 0; q < 4; ++q) {
+      if (!kQuickTags[q] || !kQuickTags[q][0]) continue;
       lv_obj_t* qb = lv_button_create(ccard);
       lv_obj_set_size(qb, 70, 34);
       lv_obj_set_pos(qb, q * 74, 36);
@@ -1956,8 +1973,8 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
     lv_obj_set_size(_compose_ta, 200, 28);
     lv_obj_set_pos(_compose_ta, 0, 2);
     lv_textarea_set_one_line(_compose_ta, true);
-    lv_textarea_set_text(_compose_ta, (ch && ch->name[0] == '#') ? ch->name : "#ch");
-    lv_textarea_set_placeholder_text(_compose_ta, "#ch or #hashtag...");
+    if (ch && ch->name[0] == '#') lv_textarea_set_text(_compose_ta, ch->name);
+    lv_textarea_set_placeholder_text(_compose_ta, "#hashtag...");
     lv_obj_set_style_text_font(_compose_ta, &faro_font_12, 0);
 
     lv_obj_t* set_tag_btn = lv_button_create(ocard);
@@ -1966,8 +1983,8 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
     Theme::styleTouchButton(set_tag_btn, p.success, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(set_tag_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
-      const char* txt = self->_compose_ta ? lv_textarea_get_text(self->_compose_ta) : "#ch";
-      if (!txt || !txt[0]) txt = "#ch";
+      const char* txt = self->_compose_ta ? lv_textarea_get_text(self->_compose_ta) : nullptr;
+      if (!txt || !txt[0]) return;
       self->_actions.addHashtagChannel(txt);
       self->_channel_thread_subpage = false;
       self->renderBody();
@@ -1999,14 +2016,15 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
     Theme::styleTouchButton(scp_btn, p.accent, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(scp_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
-      static const char* kScopes[4] = {"*", "#eu-mesh", "#ch-alps", "offgrid"};
+      const char* const* kScopes = nullptr;
+      const size_t n_scopes = scopeNames(self->_store.region(), &kScopes);
       for (size_t i = 0; i < AppStore::kMaxChannels; ++i) {
         auto& c = self->_store.channelsMutable()[i];
         if (c.valid && c.index == self->_selected_channel_idx) {
           size_t next = 0;
-          for (size_t s = 0; s < 4; ++s) {
+          for (size_t s = 0; s < n_scopes; ++s) {
             if (strcmp(c.scope_name, kScopes[s]) == 0) {
-              next = (s + 1) % 4;
+              next = (s + 1) % n_scopes;
               break;
             }
           }
@@ -2638,15 +2656,17 @@ void App::buildContactDetailView(lv_obj_t* parent) {
     lv_obj_set_width(info, 200);
     lv_obj_set_style_text_font(info, &faro_font_12, 0);
     lv_obj_set_style_text_color(info, p.text_primary, 0);
+    char ll[40];
+    formatLatLon(c->latDeg(), c->lonDeg(), 4, ll, sizeof(ll));
     char extra[40] = {0};
     if (c->remote_batt_mv > 0) {
       snprintf(extra, sizeof(extra), "\nBatt %.2fV", double(c->remote_batt_mv) / 1000.0);
     }
     lv_label_set_text_fmt(info,
-                          "%s [%s] #%02X\nKey: %s...\nPath: %s (%u hops)\nGPS: %.4f, %.4f%s",
+                          "%s [%s] #%02X\nKey: %s...\nPath: %s (%u hops)\nGPS: %s%s",
                           c->name, roleBadge(c->role), unsigned(c->pub_key[0]), hex_pre,
                           c->hasPath() ? "Direct" : "Flood", unsigned(c->pathHops()),
-                          c->latDeg(), c->lonDeg(), extra);
+                          c->hasGps() ? ll : "-", extra);
 
     // Action row: [Chat] [Share] [URI] [Map] [Del]
     lv_obj_t* chat_btn = lv_button_create(split);
@@ -3117,11 +3137,10 @@ void App::buildMapView(lv_obj_t* parent) {
   const auto& trk = _store.gpsTrack();
   const auto& st = _store.status();
 
-  // Default to Switzerland (46.8182° N, 8.2275° E) when GPS has no fix.
-  // If SD card tiles were discovered, auto-sync initial zoom and center on the SD card's
-  // Switzerland tile area if (46.8182, 8.2275) is not covered at that zoom.
-  double base_lat = 46.8182;
-  double base_lon = 8.2275;
+  // Without a GPS fix: the manual position, else the region's centre (or the SD tiles when the
+  // card does not cover that centre at this zoom).
+  double base_lat = _store.regionInfo().map_lat;
+  double base_lon = _store.regionInfo().map_lon;
   double sd_lat = 0.0, sd_lon = 0.0;
   int sd_zoom = -1;
   bool has_sd_default = _tiles.getDefaultTileCenter(sd_lat, sd_lon, sd_zoom);
@@ -3186,7 +3205,7 @@ void App::buildMapView(lv_obj_t* parent) {
     lv_obj_set_style_text_font(src_lbl, &faro_font_12, 0);
     lv_obj_set_style_text_color(src_lbl, _tiles.lastRenderUsedSdTiles() ? p.success : p.text_secondary, 0);
     lv_label_set_text_fmt(src_lbl, "%s | %s",
-                          g.valid ? "GPS LOCK" : "CH Default",
+                          g.valid ? "GPS LOCK" : "No fix",
                           _tiles.lastRenderUsedSdTiles() ? "SD Tiles OK" : "Grid Map");
     lv_obj_set_pos(src_lbl, 4, 2);
   }
@@ -3195,7 +3214,7 @@ void App::buildMapView(lv_obj_t* parent) {
   lv_obj_t* self_pin = lv_label_create(canvas);
   lv_obj_set_style_text_font(self_pin, &faro_font_12, 0);
   lv_obj_set_style_text_color(self_pin, p.accent, 0);
-  lv_label_set_text(self_pin, g.valid ? "[+] Me" : "[+] CH");
+  lv_label_set_text(self_pin, g.valid ? "[+] Me" : "[+]");
   lv_obj_set_pos(self_pin, 134, 64);
 
   int cx_t = 0, cy_t = 0, cx_px = 0, cy_px = 0;
@@ -3282,10 +3301,12 @@ void App::buildMapView(lv_obj_t* parent) {
     geomath::wgs84ToUtm(clat, clon, u_z, u_b, u_e, u_n);
     lv_label_set_text_fmt(coord, "%d%c %d %d", u_z, u_b, int(u_e), int(u_n));
   } else {
-    lv_label_set_text_fmt(coord, "Z%d %.3fN %.3fE", _map_zoom, clat, clon);
+    char ll[32];
+    formatLatLon(clat, clon, 3, ll, sizeof(ll));
+    lv_label_set_text_fmt(coord, "Z%d %s", _map_zoom, ll);
   }
 
-  const char* kMapBtns[7] = {"<", "^", "v", ">", g.valid ? "GPS" : "CH", "-", "+"};
+  const char* kMapBtns[7] = {"<", "^", "v", ">", g.valid ? "GPS" : "Ctr", "-", "+"};
   struct MapBtnCtx { App* app; int idx; };
   static MapBtnCtx s_mctx[7];
   for (int b = 0; b < 7; ++b) {
@@ -4268,7 +4289,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
         } else if (ctx->idx == 3) {
           a->_store.uiPrefs().coord_format = (a->_store.uiPrefs().coord_format + 1) % 3;
         } else if (ctx->idx == 4) {
-          s.tz_offset_hours = (s.tz_offset_hours >= 4) ? -2 : int8_t(s.tz_offset_hours + 1);
+          s.tz_offset_hours = (s.tz_offset_hours >= 14) ? int8_t(-12) : int8_t(s.tz_offset_hours + 1);
           a->_actions.syncDeviceTime(0);
         } else if (ctx->idx == 5) {
           a->_store.gpsTrack().recording = !a->_store.gpsTrack().recording;
@@ -4428,24 +4449,36 @@ void App::buildSettingsView(lv_obj_t* parent) {
       auto* ctx = static_cast<RegCtx*>(lv_event_get_user_data(e));
       App* a = ctx->app;
       if (ctx->idx == 0) {
-        static const char* kScopes[4] = {"*", "#eu-mesh", "#ch-alps", "offgrid"};
+        const char* const* kScopes = nullptr;
+        const size_t n_scopes = scopeNames(a->_store.region(), &kScopes);
         size_t next = 0;
-        for (size_t s = 0; s < 4; ++s) {
+        for (size_t s = 0; s < n_scopes; ++s) {
           if (strcmp(a->_store.status().active_scope_name, kScopes[s]) == 0) {
-            next = (s + 1) % 4;
+            next = (s + 1) % n_scopes;
             break;
           }
         }
         a->_actions.setDefaultScope(kScopes[next]);
       } else if (ctx->idx == 1) {
+        // Off-grid: client repeat on the region's repeat frequency (narrow 62.5 kHz, SF8 CR8)
+        const RadioRegion& rg = a->_store.regionInfo();
         RadioConfig cfg = a->_store.radio();
-        cfg.freq_mhz = 869.618f;
-        cfg.bw_khz = 62.5f;
-        cfg.sf = 8;
-        cfg.cr = 8;
+        if (!cfg.client_repeat && rg.repeat_count == 0) {
+          snprintf(a->_store.status().last_cli_reply, sizeof(a->_store.status().last_cli_reply),
+                   "Off-grid: %s has no client-repeat frequency.", rg.code);
+          a->renderBody();
+          return;
+        }
+        if (!cfg.client_repeat) {
+          cfg.freq_mhz = rg.repeat_freqs[rg.repeat_count > 2 ? 2 : 0];
+          cfg.bw_khz = 62.5f;
+          cfg.sf = 8;
+          cfg.cr = 8;
+        }
         cfg.client_repeat = !cfg.client_repeat;
-        a->_actions.setRadioConfig(cfg);
-        a->_actions.setDefaultScope(cfg.client_repeat ? "offgrid(*)" : "*");
+        if (a->_actions.setRadioConfig(cfg)) {
+          a->_actions.setDefaultScope(cfg.client_repeat ? "offgrid(*)" : "*");
+        }
       } else if (ctx->idx == 2) {
         a->showScreen(ScreenId::Diagnostics);
         return;
@@ -4681,7 +4714,13 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
     float toa_adv_ms  = geomath::loraTimeOnAirMs(104, r.sf, r.bw_khz, r.cr);
     float rx_sens_dbm = geomath::sx1262RxSensitivityDbm(r.sf, r.bw_khz);
     float link_bgt_db = geomath::loraLinkBudgetDb(r.tx_power_dbm, r.sf, r.bw_khz);
-    uint32_t max_hr   = geomath::maxPacketsPerHour10Pct(toa_chat_ms);
+    const float duty_pct = RegionPolicy::dutyCyclePercent(r.airtime_factor);
+    const uint32_t max_hr = toa_chat_ms > 0.0f ? uint32_t(3600000.0f * duty_pct / 100.0f / toa_chat_ms) : 0;
+#if defined(FARO_RADIO_LR1110)
+    const char* chip = "LR1110";
+#else
+    const char* chip = "SX1262";
+#endif
 
     lv_obj_t* rl = lv_label_create(rcard);
     lv_obj_set_pos(rl, 0, 0);
@@ -4689,15 +4728,15 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
     lv_obj_set_style_text_font(rl, &faro_font_mono_12, 0);
     lv_obj_set_style_text_color(rl, p.text_primary, 0);
     lv_label_set_text_fmt(rl,
-                          "SX1262: %.3fMHz BW:%.1fk SF%u CR4/%u %ddBm\n"
+                          "%s %.3fMHz BW%.1fk SF%u CR4/%u %ddBm\n"
                           "RX Sens: %.1fdBm | Link Budget: %.1fdB\n"
                           "ToA 64B Chat: %.0fms | 104B Adv: %.0fms\n"
-                          "10%% Duty: %u msg/h | RngTest: %zu pts",
-                          double(r.freq_mhz), double(r.bw_khz), unsigned(r.sf),
+                          "%.0f%% Duty: %u msg/h | RngTest: %zu pts",
+                          chip, double(r.freq_mhz), double(r.bw_khz), unsigned(r.sf),
                           unsigned(r.cr), int(r.tx_power_dbm),
                           double(rx_sens_dbm), double(link_bgt_db),
                           double(toa_chat_ms), double(toa_adv_ms),
-                          unsigned(max_hr), _store.rangeSampleCount());
+                          double(duty_pct), unsigned(max_hr), _store.rangeSampleCount());
 
     // Range Test CSV controls: [RngTest:ON/OFF] [Log Point] [Clear CSV]
     lv_obj_t* rt_btn = lv_button_create(rcard);
@@ -4759,14 +4798,19 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
     lv_obj_set_style_pad_all(gcard, 4, 0);
     lv_obj_remove_flag(gcard, LV_OBJ_FLAG_SCROLLABLE);
 
-    char pos_lines[96] = "Pos: no GPS fix\n";
+    char pos_lines[96] = "Pos: no GPS fix";
     if (g.valid) {
-      int32_t lv_e = 0, lv_n = 0;
-      geomath::wgs84ToSwissLV95(g.lat_deg, g.lon_deg, lv_e, lv_n);
+      char ll[32];
+      formatLatLon(g.lat_deg, g.lon_deg, 4, ll, sizeof(ll));
       int u_z = 0; char u_b = 'T'; int32_t u_e = 0, u_n = 0;
       geomath::wgs84ToUtm(g.lat_deg, g.lon_deg, u_z, u_b, u_e, u_n);
-      snprintf(pos_lines, sizeof(pos_lines), "WGS:%.3f,%.3f | LV95:%d,%d\nUTM:%d%c %d %d",
-               g.lat_deg, g.lon_deg, int(lv_e), int(lv_n), u_z, u_b, int(u_e), int(u_n));
+      if (up.coord_format == 1) {
+        int32_t lv_e = 0, lv_n = 0;
+        geomath::wgs84ToSwissLV95(g.lat_deg, g.lon_deg, lv_e, lv_n);
+        snprintf(pos_lines, sizeof(pos_lines), "%s | LV95:%d,%d", ll, int(lv_e), int(lv_n));
+      } else {
+        snprintf(pos_lines, sizeof(pos_lines), "%s | UTM:%d%c %d %d", ll, u_z, u_b, int(u_e), int(u_n));
+      }
     }
 
     static const char* kBotNames[3] = {"OFF", "PingBot", "AwayBot"};
@@ -4777,12 +4821,12 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
     lv_obj_set_style_text_font(gl, &faro_font_mono_12, 0);
     lv_obj_set_style_text_color(gl, p.text_primary, 0);
     lv_label_set_text_fmt(gl,
-                          "Bot:%s(%u) | S&F:%s(%u)\n"
-                          "%s | Vars:%.9s",
+                          "Bot:%s(%u) | S&F:%s(%u) | Vars:%.12s\n"
+                          "%s\n%s",
                           kBotNames[up.bot_mode % 3], unsigned(up.bot_replies_sent),
                           up.store_and_forward ? "ON" : "OFF", unsigned(up.sf_delivered_count),
-                          pos_lines,
-                          st.custom_vars_str);
+                          st.custom_vars_str, pos_lines,
+                          st.export_status[0] ? st.export_status : "Exports go to the SD card (/faro/)");
 
     // Row 1: [Bot:OFF/Ping/Away] [S&F:ON/OFF] [Export JSON]
     lv_obj_t* bt_btn = lv_button_create(gcard);
@@ -4891,13 +4935,14 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
                         "RSSI:%ddBm SNR:%+ddB Flr:%ddBm\n"
                         "TX:%u(D:%u F:%u) RX:%u Q:%u\n"
                         "Heap:%uKB PSRAM:%uKB Lp:%u/%ums\n"
-                        "Duty:%.1f%%/10%%(%s) | Sparkline(16x):",
+                        "Duty:%.1f%%/%.0f%%(%s) | Sparkline(16x):",
                         int(st.last_rssi), int(st.last_snr_q4) / 4, int(st.noise_floor_dbm),
                         unsigned(st.tx_packets), unsigned(st.direct_tx), unsigned(st.flood_tx),
                         unsigned(st.rx_packets), unsigned(st.queue_size),
                         unsigned(st.free_heap / 1024), unsigned(st.free_psram / 1024),
                         unsigned(st.last_loop_ms), unsigned(st.max_loop_ms),
                         double(st.duty_cycle_permille) / 10.0,
+                        double(RegionPolicy::dutyCyclePercent(_store.radio().airtime_factor)),
                         st.duty_cycle_throttled ? "THR" : "OK");
 
   // Render 16-bar RSSI & Noise Floor Sparkline at bottom of Stats card

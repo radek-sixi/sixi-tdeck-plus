@@ -269,30 +269,6 @@ void DeviceMeshActions::syncStore() {
     }
   }
 
-  // Ensure #ch (Switzerland regional channel) is present in slot 1 if no custom channels exist yet
-  {
-    bool has_custom_channel = false;
-    for (int idx = 1; idx < MAX_GROUP_CHANNELS; ++idx) {
-      ChannelDetails cd{};
-      if (the_mesh.getChannel(idx, cd) && cd.name[0] != '\0') {
-        has_custom_channel = true;
-        break;
-      }
-    }
-    if (!has_custom_channel) {
-      ChannelDetails ch_cd{};
-      memset(&ch_cd, 0, sizeof(ch_cd));
-      strncpy(ch_cd.name, "#ch", sizeof(ch_cd.name) - 1);
-      uint8_t digest[32] = {0};
-      SHA256 sha;
-      sha.update("#ch", 3);
-      sha.finalize(digest, sizeof(digest));
-      memcpy(ch_cd.channel.secret, digest, 16);
-      mesh::Utils::sha256(ch_cd.channel.hash, sizeof(ch_cd.channel.hash), ch_cd.channel.secret, 16);
-      the_mesh.setChannel(1, ch_cd);
-      ::store.saveChannels(&the_mesh);
-    }
-  }
 
   // Sync channels from BaseChatMesh
   for (int idx = 0; idx < MAX_GROUP_CHANNELS; ++idx) {
