@@ -315,6 +315,32 @@ bool SdCard::ensureFaroDirs() {
 #endif
 }
 
+bool SdCard::beginStdio() {
+#ifdef ARDUINO
+  if (!_mounted && !begin()) return false;
+#if defined(LILYGO_TDECK)
+  // LoRa (CS 9) and TFT (CS 12) share the bus: keep them deselected
+  digitalWrite(9, HIGH);
+  digitalWrite(12, HIGH);
+#endif
+  return ensureFaroDirs();
+#else
+  return false;
+#endif
+}
+
+void SdCard::endStdio() {
+#ifdef ARDUINO
+  if (!_mounted) return;
+  _used_mb = uint32_t(SD.usedBytes() / (1024ULL * 1024ULL));
+#if defined(LILYGO_TDECK)
+  digitalWrite(kPinCs, HIGH);
+  SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+  SPI.endTransaction();
+#endif
+#endif
+}
+
 bool SdCard::writeFile(const char* path, const uint8_t* data, size_t len) {
 #ifdef ARDUINO
   if (!path || !data) return false;

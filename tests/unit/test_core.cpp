@@ -601,12 +601,28 @@ void testRemoteResponses() {
   printf("[PASS] testRemoteResponses\n");
 }
 
+void testTrackRecording() {
+  AppStore s;
+  assert(!s.recordTrackPoint(46.0, 8.0, 500.0f, 1));  // not recording
+  s.gpsTrack().recording = true;
+  assert(s.recordTrackPoint(46.0, 8.0, 500.0f, 1));
+  assert(!s.recordTrackPoint(46.00005, 8.0, 500.0f, 2));  // ~5.6 m: skipped
+  assert(s.recordTrackPoint(46.001, 8.0, 510.0f, 3));      // ~111 m
+  assert(s.gpsTrack().point_count == 2 && s.gpsTrack().distance_m > 100.0);
+  for (int i = 0; i < 200; ++i) s.recordTrackPoint(46.002 + 0.001 * i, 8.0, 500.0f, uint32_t(4 + i));
+  const size_t cap = sizeof(s.gpsTrack().points) / sizeof(s.gpsTrack().points[0]);
+  assert(s.gpsTrack().point_count <= cap && s.gpsTrack().point_count > cap / 2);
+  assert(s.gpsTrack().points[0].timestamp == 1);  // thinning keeps the start
+  printf("[PASS] testTrackRecording\n");
+}
+
 int main() {
   testEventRing();
   testRadioConfigValidator();
   testRadioRegions();
   testPathEncodingAndTrace();
   testRemoteResponses();
+  testTrackRecording();
   testAppStoreMessagingAndRetries();
   testQrUriRoundTrip();
   testRepeatRoamService();

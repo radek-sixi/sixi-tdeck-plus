@@ -139,6 +139,16 @@ public:
 
   // Radio region: applies the region's first preset, power ceiling and duty cycle (Sixi: EU 868 only)
   virtual bool setRegion(RadioRegionId id) { (void)id; return false; }
+
+  // Exports (device: SD card /faro/, desktop: /tmp); out_path gets the written file or the error
+  virtual bool exportContactsJson(char* out_path, size_t max_len) {
+    if (out_path && max_len > 0) out_path[0] = '\0';
+    return false;
+  }
+  virtual bool exportGpsTrackGpx(char* out_path, size_t max_len) {
+    if (out_path && max_len > 0) out_path[0] = '\0';
+    return false;
+  }
 };
 
 }  // namespace faro::core

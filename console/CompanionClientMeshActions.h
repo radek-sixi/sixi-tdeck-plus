@@ -184,6 +184,8 @@ public:
   bool reconnectTarget(const char* target_spec) override;
   bool scanLanRadios(char* out_found, size_t max_len) override;
   bool setRegion(faro::core::RadioRegionId id) override;
+  bool exportContactsJson(char* out_path, size_t max_len) override;
+  bool exportGpsTrackGpx(char* out_path, size_t max_len) override;
 
 private:
   bool sendFrame(const uint8_t* payload, size_t len);

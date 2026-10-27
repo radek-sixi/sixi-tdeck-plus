@@ -21,6 +21,12 @@ public:
 
   bool ensureFaroDirs();
   void discoverMapTiles();
+
+  // stdio access (fopen) through the VFS mount: call beginStdio() first, endStdio() when done.
+  // beginStdio() returns false without a mounted card.
+  static constexpr const char* kVfsRoot = "/sd";
+  bool beginStdio();
+  void endStdio();
   bool writeFile(const char* path, const uint8_t* data, size_t len);
   bool appendLine(const char* path, const char* line);
   int32_t readFile(const char* path, uint8_t* buf, size_t max_len);

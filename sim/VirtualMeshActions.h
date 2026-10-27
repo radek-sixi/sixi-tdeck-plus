@@ -66,6 +66,8 @@ public:
   bool exportSettingsToSd(bool overwrite = true) override;
   bool importSettingsFromSd() override;
   bool setRegion(core::RadioRegionId id) override;
+  bool exportContactsJson(char* out_path, size_t max_len) override;
+  bool exportGpsTrackGpx(char* out_path, size_t max_len) override;
   bool scanNearbyNodes() override;
 
   uint32_t zeroHopAdvertsSent() const { return _zero_hop_adverts; }

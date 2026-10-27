@@ -2402,8 +2402,7 @@ void App::buildContactsView(lv_obj_t* parent) {
     lv_obj_add_event_cb(js_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       char saved[96] = {0};
-      self->_store.exportContactsJson("/tmp/faro_contacts.json", saved, sizeof(saved));
-      self->_contacts_subpage = false;
+      self->_actions.exportContactsJson(saved, sizeof(saved));
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* jsl = lv_label_create(js_btn);
@@ -3175,7 +3174,7 @@ void App::buildMapView(lv_obj_t* parent) {
     lv_obj_add_event_cb(gpx_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       char saved[96] = {0};
-      self->_store.exportGpsTrackGpx("/tmp/faro_track.gpx", saved, sizeof(saved));
+      self->_actions.exportGpsTrackGpx(saved, sizeof(saved));
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* gpxl = lv_label_create(gpx_btn);
@@ -4822,7 +4821,7 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
     lv_obj_add_event_cb(jsn_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       char saved[96] = {0};
-      self->_store.exportContactsJson("/tmp/faro_contacts.json", saved, sizeof(saved));
+      self->_actions.exportContactsJson(saved, sizeof(saved));
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* jsnl = lv_label_create(jsn_btn);
@@ -4867,7 +4866,7 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
     lv_obj_add_event_cb(gp_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       char saved[96] = {0};
-      self->_store.exportGpsTrackGpx("/tmp/faro_track.gpx", saved, sizeof(saved));
+      self->_actions.exportGpsTrackGpx(saved, sizeof(saved));
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* gpl = lv_label_create(gp_btn);

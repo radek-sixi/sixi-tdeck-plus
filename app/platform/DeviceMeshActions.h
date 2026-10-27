@@ -91,6 +91,8 @@ public:
   bool getCustomVars(char* out_vars, size_t max_len) override;
   bool setCustomVar(const char* key_val) override;
   bool setRegion(core::RadioRegionId id) override;
+  bool exportContactsJson(char* out_path, size_t max_len) override;
+  bool exportGpsTrackGpx(char* out_path, size_t max_len) override;
 
 private:
   void enforceRadioPolicy();

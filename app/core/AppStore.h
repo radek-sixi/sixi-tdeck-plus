@@ -126,6 +126,9 @@ public:
   // Answer to a request this device sent (status, telemetry, neighbours, ACL, login)
   void applyRemoteResponse(RemoteRequestKind kind, const uint8_t pub_key[32], const uint8_t* data, size_t len);
 
+  // GPS track: adds a point while recording (skips points closer than 15 m); thins the track when full
+  bool recordTrackPoint(double lat_deg, double lon_deg, float alt_m, uint32_t ts);
+
   SystemStatus& status() { return _status; }
   const SystemStatus& status() const { return _status; }
 

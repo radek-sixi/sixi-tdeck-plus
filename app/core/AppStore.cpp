@@ -884,9 +884,13 @@ void AppStore::recordRangeSample(double lat_deg, double lon_deg, int8_t snr_q4, 
     _range_samples[kMaxRangeSamples - 1] = s;
   }
 
-  // Also append to CSV on filesystem when available
-  const char* csv_path = _status.last_rangetest_csv[0] ? _status.last_rangetest_csv : "/tmp/faro_rangetest.csv";
+  // Also append to the CSV file when a writable path is set (empty on devices without a card)
+  const char* csv_path = _status.last_rangetest_csv;
   bool write_header = false;
+  if (!csv_path[0]) {
+    ++_version;
+    return;
+  }
   if (FILE* check = fopen(csv_path, "r")) {
     fclose(check);
   } else {
@@ -995,6 +999,31 @@ size_t AppStore::discoveredCount() const {
 void AppStore::clearDiscovered() {
   for (size_t i = 0; i < kMaxDiscovered; ++i) _discovered[i] = DiscoveredNode{};
   ++_version;
+}
+
+bool AppStore::recordTrackPoint(double lat_deg, double lon_deg, float alt_m, uint32_t ts) {
+  GpsTrackSummary& t = _gps_track;
+  if (!t.recording || (lat_deg == 0.0 && lon_deg == 0.0)) return false;
+  constexpr size_t kCap = sizeof(t.points) / sizeof(t.points[0]);
+  if (t.point_count > 0) {
+    const GpsTrackPoint& last = t.points[t.point_count - 1];
+    const double d = geomath::distanceMeters(last.lat_deg, last.lon_deg, lat_deg, lon_deg);
+    if (d < 15.0) return false;
+    t.distance_m += d;
+  }
+  if (t.point_count >= kCap) {
+    // Keep every second point: the track keeps its shape with half the resolution
+    size_t w = 0;
+    for (size_t r = 0; r < t.point_count; r += 2) t.points[w++] = t.points[r];
+    t.point_count = w;
+  }
+  GpsTrackPoint& p = t.points[t.point_count++];
+  p.lat_deg = lat_deg;
+  p.lon_deg = lon_deg;
+  p.alt_m = alt_m;
+  p.timestamp = ts;
+  ++_version;
+  return true;
 }
 
 namespace {

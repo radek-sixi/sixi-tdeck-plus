@@ -45,6 +45,13 @@ void DeviceMeshActions::begin(mesh::MainBoard* board, MultiSerialInterface* ifac
 
   syncStore();
 
+  // Range-test CSV only where a card is mounted (stdio path through the SD VFS)
+  SystemStatus& st = _store.status();
+  if (_sd && _sd->isMounted()) {
+    snprintf(st.last_rangetest_csv, sizeof(st.last_rangetest_csv), "%s/faro/rangetest.csv", hal::SdCard::kVfsRoot);
+  } else {
+    st.last_rangetest_csv[0] = '\0';
+  }
 }
 
 void DeviceMeshActions::startRadioPolicy(bool region_was_saved) {
@@ -354,6 +361,9 @@ void DeviceMeshActions::pollTelemetry(uint32_t now_ms, uint16_t batt_mv, uint8_t
     g.alt_m = _sensors->node_altitude;
     g.valid = (g.lat_deg != 0.0 || g.lon_deg != 0.0);
     g.nmea_sentences = nmea_sentences;
+    if (g.valid && _store.gpsTrack().recording) {
+      _store.recordTrackPoint(g.lat_deg, g.lon_deg, float(g.alt_m), the_mesh.getRTCClock()->getCurrentTime());
+    }
   }
 
   // Radio settings changed by the phone app / a TCP client since the last check
@@ -1321,6 +1331,48 @@ bool DeviceMeshActions::setCustomVar(const char* key_val) {
   char dummy[8];
   getCustomVars(dummy, sizeof(dummy));
   return true;
+}
+
+bool DeviceMeshActions::exportContactsJson(char* out_path, size_t max_len) {
+  auto& st = _store.status();
+  bool ok = false;
+  if (_sd && _sd->beginStdio()) {
+    char path[48];
+    snprintf(path, sizeof(path), "%s/faro/contacts.json", hal::SdCard::kVfsRoot);
+    ok = _store.exportContactsJson(path, nullptr, 0);
+    _sd->endStdio();
+  }
+  snprintf(st.export_status, sizeof(st.export_status), ok ? "Saved to SD: /faro/contacts.json"
+                                                          : (_sd && _sd->isMounted() ? "ERR: writing to SD failed"
+                                                                                     : "No SD card: export needs a card"));
+  if (out_path && max_len > 0) {
+    strncpy(out_path, st.export_status, max_len - 1);
+    out_path[max_len - 1] = '\0';
+  }
+  _store.bumpVersion();
+  return ok;
+}
+
+bool DeviceMeshActions::exportGpsTrackGpx(char* out_path, size_t max_len) {
+  auto& st = _store.status();
+  bool ok = false;
+  if (_store.gpsTrack().point_count == 0) {
+    snprintf(st.export_status, sizeof(st.export_status), "No track points yet (start GPX recording)");
+  } else if (_sd && _sd->beginStdio()) {
+    char path[48];
+    snprintf(path, sizeof(path), "%s/faro/track.gpx", hal::SdCard::kVfsRoot);
+    ok = _store.exportGpsTrackGpx(path, nullptr, 0);
+    _sd->endStdio();
+    snprintf(st.export_status, sizeof(st.export_status), ok ? "Saved to SD: /faro/track.gpx" : "ERR: writing to SD failed");
+  } else {
+    snprintf(st.export_status, sizeof(st.export_status), "No SD card: export needs a card");
+  }
+  if (out_path && max_len > 0) {
+    strncpy(out_path, st.export_status, max_len - 1);
+    out_path[max_len - 1] = '\0';
+  }
+  _store.bumpVersion();
+  return ok;
 }
 
 bool DeviceMeshActions::syncDeviceTime(uint32_t unix_ts) {

@@ -815,6 +815,24 @@ bool CompanionClientMeshActions::setRegion(RadioRegionId id) {
   return true;
 }
 
+bool CompanionClientMeshActions::exportContactsJson(char* out_path, size_t max_len) {
+  const bool ok = _store.exportContactsJson("/tmp/faro_contacts.json", nullptr, 0);
+  snprintf(_store.status().export_status, sizeof(_store.status().export_status),
+           ok ? "Saved /tmp/faro_contacts.json" : "ERR: cannot write /tmp/faro_contacts.json");
+  if (out_path && max_len > 0) snprintf(out_path, max_len, "%s", _store.status().export_status);
+  _store.bumpVersion();
+  return ok;
+}
+
+bool CompanionClientMeshActions::exportGpsTrackGpx(char* out_path, size_t max_len) {
+  const bool ok = _store.exportGpsTrackGpx("/tmp/faro_track.gpx", nullptr, 0);
+  snprintf(_store.status().export_status, sizeof(_store.status().export_status),
+           ok ? "Saved /tmp/faro_track.gpx" : "ERR: cannot write /tmp/faro_track.gpx");
+  if (out_path && max_len > 0) snprintf(out_path, max_len, "%s", _store.status().export_status);
+  _store.bumpVersion();
+  return ok;
+}
+
 bool CompanionClientMeshActions::setDefaultScope(const char* scope_name) {
   if (!scope_name) return false;
   strncpy(_store.status().active_scope_name, scope_name, sizeof(_store.status().active_scope_name) - 1);
