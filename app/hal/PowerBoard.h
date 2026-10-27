@@ -19,6 +19,7 @@ public:
 private:
   uint16_t _last_mv = 0;
   bool _charging = false;
+  uint32_t _last_read_ms = 0;
 };
 
 }  // namespace faro::hal
