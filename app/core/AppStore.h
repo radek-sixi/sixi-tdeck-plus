@@ -41,9 +41,25 @@ struct UiPrefs {
 
 class AppStore {
 public:
-  static constexpr size_t kMaxContacts      = 64;   // active UI view / store capacity (up to 350 on device)
+  // Same capacity as MeshCore's contact table (MAX_CONTACTS). Headless builds have no UI and some no
+  // PSRAM: they keep a small store (radio region and policy only).
+#if defined(FARO_STORE_MAX_CONTACTS)
+  static constexpr size_t kMaxContacts      = FARO_STORE_MAX_CONTACTS;
+#elif defined(FARO_HEADLESS)
+  static constexpr size_t kMaxContacts      = 32;
+#elif defined(MAX_CONTACTS)
+  static constexpr size_t kMaxContacts      = MAX_CONTACTS;
+#else
+  static constexpr size_t kMaxContacts      = 350;
+#endif
   static constexpr size_t kMaxChannels      = 40;
+#if defined(FARO_STORE_MAX_MESSAGES)
+  static constexpr size_t kMaxMessages      = FARO_STORE_MAX_MESSAGES;
+#elif defined(FARO_HEADLESS)
+  static constexpr size_t kMaxMessages      = 32;
+#else
   static constexpr size_t kMaxMessages      = 256;
+#endif
   static constexpr size_t kMaxDiscovered    = 16;
   static constexpr size_t kMaxCanned        = 12;
 

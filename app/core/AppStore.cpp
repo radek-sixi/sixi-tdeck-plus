@@ -291,6 +291,13 @@ void AppStore::applyEvent(const MeshEvent& ev, uint32_t now_ms) {
     }
     case MeshEventType::AckRecv: {
       if (markAckReceived(ev.ack_crc)) {
+        if (!_ui_prefs.sniffer_paused) {
+          RxPacketLogEntry pl{};
+          pl.timestamp_ms = now_ms;
+          strncpy(pl.type_label, "ACK", sizeof(pl.type_label) - 1);
+          snprintf(pl.summary, sizeof(pl.summary), "delivered (crc %08X)", unsigned(ev.ack_crc));
+          appendPacketLog(pl);
+        }
         ++_version;
       }
       break;

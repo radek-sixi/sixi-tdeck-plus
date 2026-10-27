@@ -56,7 +56,13 @@ public:
 
   static const char* screenSlug(ScreenId id);
 
+  // Lists show at most this many rows (newest first); filters and search reach the rest
+  static constexpr size_t kMaxListRows = 40;
+
 private:
+  // Indexes of valid contacts that pass `keep`, favourites first, then by last advert (newest first)
+  template <typename Pred>
+  size_t sortedContacts(size_t* out, size_t max_out, Pred keep) const;
   void rebuildChrome();
   void updateStatusBar();
   void renderBody();
@@ -137,6 +143,7 @@ private:
   uint32_t  _last_bot_reply_ms = 0;
 
   uint16_t _map_canvas_buf[308 * 144] = {0};
+  size_t   _order[core::AppStore::kMaxContacts] = {};  // sorted list rows (one view at a time)
 };
 
 }  // namespace faro::ui

@@ -30,7 +30,7 @@ static const Row kCatalog[size_t(StrId::_Count)] = {
   // GroupChannels
   {"Group Channels", "Canali di Gruppo", "Gruppenkanäle", "Canaux de groupe"},
   // DiscoverMesh
-  {"Discover & Repeat-Roam", "Scopri & Repeat-Roam", "Suche & Repeat-Roam", "Découverte & Roaming"},
+  {"Discover nodes", "Scopri nodi", "Knoten suchen", "Découvrir les nœuds"},
   // ContactsDir
   {"Contacts Directory", "Rubrica Contatti", "Kontaktverzeichnis", "Répertoire contacts"},
   // ContactDetails
@@ -64,7 +64,7 @@ static const Row kCatalog[size_t(StrId::_Count)] = {
   // BtnTelemetry
   {"Telemetry", "Telemetria", "Telemetrie", "Télémétrie"},
   // RepeatRoamPreferred
-  {"Preferred Repeater", "Ripetitore Preferito", "Bevorzugter Repeater", "Répéteur préféré"},
+  {"Strongest repeater", "Ripetitore più forte", "Stärkster Repeater", "Répéteur le plus fort"},
   // NoGpsFix
   {"No GPS Fix", "Nessun Fix GPS", "Kein GPS-Fix", "Pas de signal GPS"},
   // ThemeDark

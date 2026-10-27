@@ -142,6 +142,32 @@ size_t scopeNames(RadioRegionId region, const char* const** out) {
 }
 }  // namespace
 
+template <typename Pred>
+size_t App::sortedContacts(size_t* out, size_t max_out, Pred keep) const {
+  size_t n = 0;
+  for (size_t i = 0; i < AppStore::kMaxContacts && n < max_out; ++i) {
+    const ContactRecord& c = _store.contacts()[i];
+    if (c.valid && keep(c)) out[n++] = i;
+  }
+  const ContactRecord* cs = _store.contacts();
+  // Insertion sort: small n, and the order stays stable between renders
+  for (size_t i = 1; i < n; ++i) {
+    const size_t v = out[i];
+    size_t j = i;
+    while (j > 0) {
+      const ContactRecord& a = cs[out[j - 1]];
+      const ContactRecord& b = cs[v];
+      const bool b_first = (b.favourite && !a.favourite) ||
+                           (b.favourite == a.favourite && b.last_advert_ts > a.last_advert_ts);
+      if (!b_first) break;
+      out[j] = out[j - 1];
+      --j;
+    }
+    out[j] = v;
+  }
+  return n;
+}
+
 App::App(AppStore& store, IMeshActions& actions, OfflineTileReader& tile_reader)
   : _store(store), _actions(actions), _tiles(tile_reader) {}
 
@@ -1437,23 +1463,27 @@ void App::buildChatsView(lv_obj_t* parent) {
     }
 
   struct PeerCtx { App* app; size_t idx; };
-  static PeerCtx s_peer_ctx[AppStore::kMaxContacts];
-
-  for (size_t i = 0; i < AppStore::kMaxContacts; ++i) {
-    const auto& c = _store.contacts()[i];
-    if (!c.valid) continue;
-    if (_contact_filter == 1 && c.role != NodeRole::ChatNode) continue;
-    if (_contact_filter == 2 && c.role != NodeRole::Repeater && c.role != NodeRole::RoomServer) continue;
-    if (_contact_filter == 3 && c.role != NodeRole::RoomServer) continue;
-    if (_contact_filter == 4 && c.role != NodeRole::Sensor) continue;
-    if (_contact_filter == 5 && !c.favourite) continue;
-    if (_contact_filter == 6 && c.tag_mask == 0) continue;
-    if (_store.uiPrefs().search_active && _store.uiPrefs().search_query[0] != '\0') {
-      if (strstr(c.name, _store.uiPrefs().search_query) == nullptr &&
-          strstr(c.notes, _store.uiPrefs().search_query) == nullptr) {
-        continue;
-      }
+  static PeerCtx s_peer_ctx[kMaxListRows];  // one per shown row (static RAM stays small)
+  size_t* s_order = _order;
+  const UiPrefs& sup = _store.uiPrefs();
+  const uint8_t cf = _contact_filter;
+  const size_t n_match = sortedContacts(s_order, AppStore::kMaxContacts, [&](const ContactRecord& c) {
+    if (cf == 1 && c.role != NodeRole::ChatNode) return false;
+    if (cf == 2 && c.role != NodeRole::Repeater && c.role != NodeRole::RoomServer) return false;
+    if (cf == 3 && c.role != NodeRole::RoomServer) return false;
+    if (cf == 4 && c.role != NodeRole::Sensor) return false;
+    if (cf == 5 && !c.favourite) return false;
+    if (cf == 6 && c.tag_mask == 0) return false;
+    if (sup.search_active && sup.search_query[0] != '\0' && strstr(c.name, sup.search_query) == nullptr &&
+        strstr(c.notes, sup.search_query) == nullptr) {
+      return false;
     }
+    return true;
+  });
+
+  for (size_t k = 0; k < n_match && k < kMaxListRows; ++k) {
+    const size_t i = s_order[k];
+    const auto& c = _store.contacts()[i];
 
     lv_obj_t* row = lv_obj_create(parent);
     lv_obj_set_size(row, 308, 40);
@@ -1463,13 +1493,13 @@ void App::buildChatsView(lv_obj_t* parent) {
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_peer_ctx[i] = {this, i};
+    s_peer_ctx[k] = {this, i};
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(row, [](lv_event_t* e) {
       auto* ctx = static_cast<PeerCtx*>(lv_event_get_user_data(e));
       if (!ctx || !ctx->app) return;
       ctx->app->openChatWithContact(ctx->idx);
-    }, LV_EVENT_CLICKED, &s_peer_ctx[i]);
+    }, LV_EVENT_CLICKED, &s_peer_ctx[k]);
 
     createAvatarCircle(row, c.name, c.pub_key[0]);
 
@@ -1504,7 +1534,7 @@ void App::buildChatsView(lv_obj_t* parent) {
       } else {
         ctx->app->openChatWithContact(ctx->idx);
       }
-    }, LV_EVENT_CLICKED, &s_peer_ctx[i]);
+    }, LV_EVENT_CLICKED, &s_peer_ctx[k]);
     lv_obj_t* ol = lv_label_create(open_btn);
     lv_obj_set_style_text_font(ol, &faro_font_12, 0);
     if (c.role == NodeRole::Repeater || c.role == NodeRole::Sensor) {
@@ -1513,6 +1543,12 @@ void App::buildChatsView(lv_obj_t* parent) {
       lv_label_set_text_fmt(ol, c.unread_count > 0 ? "Chat(%u)" : "Chat", unsigned(c.unread_count));
     }
     lv_obj_center(ol);
+  }
+  if (n_match > kMaxListRows) {
+    lv_obj_t* more = lv_label_create(parent);
+    lv_obj_set_style_text_font(more, &faro_font_12, 0);
+    lv_obj_set_style_text_color(more, p.text_secondary, 0);
+    lv_label_set_text_fmt(more, "+%u more: use a filter or search", unsigned(n_match - kMaxListRows));
   }
 }
 
@@ -2332,14 +2368,19 @@ void App::buildDiscoverView(lv_obj_t* parent) {
 
   // Heard & Discovered Nodes List (whole row clickable + big Select button)
   struct DiscNodeCtx { App* app; size_t idx; };
-  static DiscNodeCtx s_dn_ctx[AppStore::kMaxContacts];
-  for (size_t i = 0; i < AppStore::kMaxContacts; ++i) {
+  static DiscNodeCtx s_dn_ctx[kMaxListRows];
+  size_t* s_dorder = _order;
+  const uint8_t df = _discover_filter;
+  const size_t n_disc = sortedContacts(s_dorder, AppStore::kMaxContacts, [&](const ContactRecord& c) {
+    if (df == 1 && c.role != NodeRole::Repeater) return false;
+    if (df == 2 && c.role != NodeRole::RoomServer) return false;
+    if (df == 3 && c.role != NodeRole::ChatNode) return false;
+    if (df == 4 && c.role != NodeRole::Sensor) return false;
+    return true;
+  });
+  for (size_t k = 0; k < n_disc && k < kMaxListRows; ++k) {
+    const size_t i = s_dorder[k];
     const auto& c = _store.contacts()[i];
-    if (!c.valid) continue;
-    if (_discover_filter == 1 && c.role != NodeRole::Repeater) continue;
-    if (_discover_filter == 2 && c.role != NodeRole::RoomServer) continue;
-    if (_discover_filter == 3 && c.role != NodeRole::ChatNode) continue;
-    if (_discover_filter == 4 && c.role != NodeRole::Sensor) continue;
 
     lv_obj_t* row = lv_obj_create(parent);
     lv_obj_set_size(row, 308, 38);
@@ -2349,7 +2390,7 @@ void App::buildDiscoverView(lv_obj_t* parent) {
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_dn_ctx[i] = {this, i};
+    s_dn_ctx[k] = {this, i};
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(row, [](lv_event_t* e) {
       auto* ctx = static_cast<DiscNodeCtx*>(lv_event_get_user_data(e));
@@ -2357,7 +2398,7 @@ void App::buildDiscoverView(lv_obj_t* parent) {
         ctx->app->_contact_detail_tab = 0;
         ctx->app->openContactDetail(ctx->idx);
       }
-    }, LV_EVENT_CLICKED, &s_dn_ctx[i]);
+    }, LV_EVENT_CLICKED, &s_dn_ctx[k]);
 
     lv_obj_t* rl = lv_label_create(row);
     lv_obj_set_width(rl, 224);
@@ -2385,11 +2426,17 @@ void App::buildDiscoverView(lv_obj_t* parent) {
         ctx->app->_contact_detail_tab = 0;
         ctx->app->openContactDetail(ctx->idx);
       }
-    }, LV_EVENT_CLICKED, &s_dn_ctx[i]);
+    }, LV_EVENT_CLICKED, &s_dn_ctx[k]);
     lv_obj_t* bl = lv_label_create(btn);
     lv_obj_set_style_text_font(bl, &faro_font_12, 0);
     lv_label_set_text(bl, "Select");
     lv_obj_center(bl);
+  }
+  if (n_disc > kMaxListRows) {
+    lv_obj_t* more = lv_label_create(parent);
+    lv_obj_set_style_text_font(more, &faro_font_12, 0);
+    lv_obj_set_style_text_color(more, p.text_secondary, 0);
+    lv_label_set_text_fmt(more, "+%u more: use a filter", unsigned(n_disc - kMaxListRows));
   }
 }
 
@@ -2511,24 +2558,28 @@ void App::buildContactsView(lv_obj_t* parent) {
   }
 
   struct ContactCtx { App* app; size_t idx; };
-  static ContactCtx s_cctx[AppStore::kMaxContacts];
-  static ContactCtx s_fav_ctx[AppStore::kMaxContacts];
-
-  for (size_t i = 0; i < AppStore::kMaxContacts; ++i) {
-    const auto& c = _store.contacts()[i];
-    if (!c.valid) continue;
-    if (_contact_filter == 1 && c.role != NodeRole::ChatNode) continue;
-    if (_contact_filter == 2 && c.role != NodeRole::Repeater && c.role != NodeRole::RoomServer) continue;
-    if (_contact_filter == 3 && c.role != NodeRole::RoomServer) continue;
-    if (_contact_filter == 4 && c.role != NodeRole::Sensor) continue;
-    if (_contact_filter == 5 && !c.favourite) continue;
-    if (_contact_filter == 6 && c.tag_mask == 0) continue;
-    if (_store.uiPrefs().search_active && _store.uiPrefs().search_query[0] != '\0') {
-      if (strstr(c.name, _store.uiPrefs().search_query) == nullptr &&
-          strstr(c.notes, _store.uiPrefs().search_query) == nullptr) {
-        continue;
-      }
+  static ContactCtx s_cctx[kMaxListRows];
+  static ContactCtx s_fav_ctx[kMaxListRows];
+  size_t* s_corder = _order;
+  const UiPrefs& sup = _store.uiPrefs();
+  const uint8_t cf = _contact_filter;
+  const size_t n_match = sortedContacts(s_corder, AppStore::kMaxContacts, [&](const ContactRecord& c) {
+    if (cf == 1 && c.role != NodeRole::ChatNode) return false;
+    if (cf == 2 && c.role != NodeRole::Repeater && c.role != NodeRole::RoomServer) return false;
+    if (cf == 3 && c.role != NodeRole::RoomServer) return false;
+    if (cf == 4 && c.role != NodeRole::Sensor) return false;
+    if (cf == 5 && !c.favourite) return false;
+    if (cf == 6 && c.tag_mask == 0) return false;
+    if (sup.search_active && sup.search_query[0] != '\0' && strstr(c.name, sup.search_query) == nullptr &&
+        strstr(c.notes, sup.search_query) == nullptr) {
+      return false;
     }
+    return true;
+  });
+
+  for (size_t k = 0; k < n_match && k < kMaxListRows; ++k) {
+    const size_t i = s_corder[k];
+    const auto& c = _store.contacts()[i];
 
     lv_obj_t* row = lv_obj_create(parent);
     lv_obj_set_size(row, 308, 40);
@@ -2538,7 +2589,7 @@ void App::buildContactsView(lv_obj_t* parent) {
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_cctx[i] = {this, i};
+    s_cctx[k] = {this, i};
     lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(row, [](lv_event_t* e) {
       auto* ctx = static_cast<ContactCtx*>(lv_event_get_user_data(e));
@@ -2546,7 +2597,7 @@ void App::buildContactsView(lv_obj_t* parent) {
         ctx->app->_contact_detail_tab = 0;
         ctx->app->openContactDetail(ctx->idx);
       }
-    }, LV_EVENT_CLICKED, &s_cctx[i]);
+    }, LV_EVENT_CLICKED, &s_cctx[k]);
 
     double dist_km = 0.0;
     const char* card_dir = "--";
@@ -2562,7 +2613,7 @@ void App::buildContactsView(lv_obj_t* parent) {
     lv_obj_set_style_text_color(lbl, p.text_primary, 0);
     lv_label_set_text_fmt(lbl, "%s [%s] %.1fkm %s", c.name, roleBadge(c.role), dist_km, card_dir);
 
-    s_fav_ctx[i] = {this, i};
+    s_fav_ctx[k] = {this, i};
     lv_obj_t* fbtn = lv_button_create(row);
     lv_obj_set_size(fbtn, 38, 28);
     Theme::styleTouchButton(fbtn, c.favourite ? p.warning : p.surface_alt, lv_color_hex(0xFFFFFF));
@@ -2571,7 +2622,7 @@ void App::buildContactsView(lv_obj_t* parent) {
       auto& peer = ctx->app->_store.contactsMutable()[ctx->idx];
       peer.favourite = !peer.favourite;
       ctx->app->renderBody();
-    }, LV_EVENT_CLICKED, &s_fav_ctx[i]);
+    }, LV_EVENT_CLICKED, &s_fav_ctx[k]);
     lv_obj_t* flbl = lv_label_create(fbtn);
     lv_obj_set_style_text_font(flbl, &faro_font_12, 0);
     lv_label_set_text(flbl, c.favourite ? "*" : "+*");
@@ -2586,11 +2637,17 @@ void App::buildContactsView(lv_obj_t* parent) {
         ctx->app->_contact_detail_tab = 0;
         ctx->app->openContactDetail(ctx->idx);
       }
-    }, LV_EVENT_CLICKED, &s_cctx[i]);
+    }, LV_EVENT_CLICKED, &s_cctx[k]);
     lv_obj_t* bl = lv_label_create(btn);
     lv_obj_set_style_text_font(bl, &faro_font_12, 0);
     lv_label_set_text(bl, "Detail");
     lv_obj_center(bl);
+  }
+  if (n_match > kMaxListRows) {
+    lv_obj_t* more = lv_label_create(parent);
+    lv_obj_set_style_text_font(more, &faro_font_12, 0);
+    lv_obj_set_style_text_color(more, p.text_secondary, 0);
+    lv_label_set_text_fmt(more, "+%u more: use a filter or search", unsigned(n_match - kMaxListRows));
   }
 }
 
@@ -4534,7 +4591,7 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
   lv_label_set_text(bl, "<");
   lv_obj_center(bl);
 
-  static const char* kDTabs[5] = {"Stats", "Sniff", "Graph", "RF", "Mesh"};
+  static const char* kDTabs[5] = {"Stats", "RX log", "Graph", "RF", "Mesh"};
   struct DTabCtx { App* app; uint8_t t; };
   static DTabCtx s_dtctx[5];
   const uint8_t num_tabs = 5;
@@ -4558,7 +4615,8 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
   }
 
   if (_diag_tab == 1) {
-    // TAB 1: Live Packet Sniffer / Raw RX Analyzer (PUSH_CODE_LOG_RX_DATA = 0x88)
+    // TAB 1: RX log. MeshCore hands the UI decoded traffic only (messages, adverts, ACKs, traces, answers):
+    // raw RF frames reach only a connected app (PUSH_CODE_LOG_RX_DATA), so this is not a raw sniffer.
     lv_obj_t* sbar = lv_obj_create(parent);
     lv_obj_set_size(sbar, 308, 24);
     lv_obj_set_style_bg_opa(sbar, LV_OPA_TRANSP, 0);
@@ -4571,7 +4629,7 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
     lv_obj_t* cnt_lbl = lv_label_create(sbar);
     lv_obj_set_style_text_font(cnt_lbl, &faro_font_mono_12, 0);
     lv_obj_set_style_text_color(cnt_lbl, p.accent, 0);
-    lv_label_set_text_fmt(cnt_lbl, "Live LoRa Packets (%zu)", _store.packetLogCount());
+    lv_label_set_text_fmt(cnt_lbl, "Received traffic (%zu)", _store.packetLogCount());
 
     lv_obj_t* ps_btn = lv_button_create(sbar);
     lv_obj_set_size(ps_btn, 58, 22);
@@ -4610,7 +4668,7 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
       lv_obj_t* emp = lv_label_create(pbox);
       lv_obj_set_style_text_font(emp, &faro_font_mono_12, 0);
       lv_obj_set_style_text_color(emp, p.text_secondary, 0);
-      lv_label_set_text(emp, "Listening for RF frames (869.618 MHz)...");
+      lv_label_set_text_fmt(emp, "Waiting for messages, adverts, ACKs\n(%.3f MHz)...", double(r.freq_mhz));
     } else {
       for (size_t i = _store.packetLogCount(); i > 0; --i) {
         const auto& pl = _store.packetLogAt(i - 1);
