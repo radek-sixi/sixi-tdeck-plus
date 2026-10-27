@@ -7,7 +7,9 @@
   desktop console run the same UI.
 - `external/MeshCore` is unmodified upstream MeshCore. Faro changes go in this repository; changes that belong
   in MeshCore go upstream as a separate pull request. `scripts/verify_upstream_clean.sh` checks the submodule.
-- Radio settings must stay inside the band policy in `app/core/Types.h` (`RadioBandPolicy`).
+- Radio settings must stay inside the rules of the selected region (`app/core/RadioRegions.h`). A new region
+  needs its sub-bands, power ceiling and duty cycle from the national rules (with a link in the pull request),
+  presets that fit it, and a duty cycle MeshCore can enforce (10 % or more).
 
 ## Before you open a pull request
 

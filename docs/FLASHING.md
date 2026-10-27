@@ -50,12 +50,20 @@ encrypted; delete it from the card afterwards.
 
 ## Radio settings after the first boot
 
-A new device starts on the preset *EU/CH Narrow*: 869.618 MHz, 62.5 kHz, SF8, CR 4/8, 22 dBm. Settings stored
-by an earlier firmware are kept; to change to the preset, pick it in Settings › Radio. Frequency, bandwidth, SF
-and CR have to match on every node of a mesh; TX power is per device.
+A new device starts on the preset *EU/UK/CH Narrow*: 869.618 MHz, 62.5 kHz, SF8, CR 4/8, 22 dBm. The welcome screen
+shown at the first start of this Faro version lets you pick the region of your country (Settings › Radio later).
+Settings stored by an earlier firmware are kept when they fit one of Faro's regions (the region follows them);
+otherwise Faro switches to the region's first preset and shows the new values in Settings › Radio. Frequency,
+bandwidth, SF and CR have to match on every node of a mesh; TX power is per device.
 
-If the stored radio settings are outside the band Faro allows (869.400–869.650 MHz, ≤ 27 dBm e.r.p.,
-≤ 10 % duty cycle), Faro adjusts them at boot and shows the new values in Settings › Radio.
+The regions and their limits are listed in the README (*Radio regions*). Use the hardware variant for your band
+(e.g. a 433 MHz board for EU 433): the radio chip tunes outside its antenna's band, but it will barely work.
+
+## Data Faro keeps
+
+Next to MeshCore's own files, Faro writes `/faro_ui.bin` (region, UI settings, contact tags/notes) and
+`/faro_msgs.bin` (chat history) to the same SPIFFS partition. A firmware update at `0x10000` keeps them; a full
+flash at `0x0` or a factory reset deletes them. `clear history` (Settings › CLI) deletes only the chat history.
 
 ## Rollback
 
