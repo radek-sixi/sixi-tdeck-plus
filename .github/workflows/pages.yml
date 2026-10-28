@@ -1,0 +1,91 @@
+name: Mesh America catalog
+
+# Publishes the Mesh America Device Configurator catalog on GitHub Pages:
+#   https://<owner>.github.io/<repo>/catalog.json
+#   https://<owner>.github.io/<repo>/firmware/<tag>/<asset>.bin
+#
+# Release assets themselves cannot be used: github.com redirects them to
+# release-assets.githubusercontent.com, which does not send Access-Control-Allow-Origin, and the
+# configurator flashes from the browser. GitHub Pages does send it.
+#
+# Runs after a release is published and on demand. The catalog lists the newest few releases so a
+# published firmware URL stays valid for a while.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    name: Build catalog
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: actions/configure-pages@v6.0.0
+      - name: Build catalog and copy firmware
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          python3 scripts/build_mesh_america_catalog.py
+          --out _site
+          --base-url "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+      - uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: _site
+
+  deploy:
+    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5.0.1
+
+  check:
+    if: github.repository == 'radek-sixi/sixi-tdeck-plus'   # public repository only
+    name: Check the live catalog
+    needs: deploy
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Catalog and firmware are live, valid and CORS-enabled
+        run: |
+          base="https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}"
+          curl -fsS --retry 6 --retry-delay 5 --retry-all-errors -D headers.txt "$base/catalog.json" -o catalog.json
+          grep -qi '^access-control-allow-origin: \*' headers.txt
+          python3 - <<'PY' > firmware-url.txt
+          import json
+          import sys
+          catalog = json.load(open("catalog.json"))
+          devices = catalog["device"]
+          assert devices, "catalog has no devices"
+          first = None
+          for device in devices:
+              for firmware in device["firmware"]:
+                  assert firmware["version"], f"{device['name']}: no versions"
+                  for version in firmware["version"].values():
+                      for file in version["files"]:
+                          assert file["url"].startswith("https://"), file["url"]
+                          first = first or file["url"]
+          print(first)
+          print(f"{len(devices)} devices, {sum(len(d['firmware'][0]['version']) for d in devices)} device versions", file=sys.stderr)
+          PY
+          curl -fsS --retry 6 --retry-delay 5 --retry-all-errors -D fw-headers.txt -o /dev/null "$(cat firmware-url.txt)"
+          grep -qi '^access-control-allow-origin: \*' fw-headers.txt
