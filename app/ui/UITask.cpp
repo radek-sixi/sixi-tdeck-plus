@@ -176,6 +176,7 @@ public:
   uint32_t last_input_ms = 0;
   uint8_t pending_key = 0;
   bool dimmed = false;
+  bool screen_off = false;
 #endif
   uint32_t last_ms = 0;
 
@@ -218,6 +219,7 @@ public:
     }
     touch.begin();
     keyboard.begin();
+    keyboard.setBacklight(store.uiPrefs().kb_backlight);
     trackball.begin();
 
     lv_init();
@@ -244,7 +246,7 @@ public:
       if (self && self->touch.read(tx, ty)) {
         data->point.x = tx;
         data->point.y = ty;
-        if (self->dimmed) {
+        if (self->dimmed || self->screen_off) {
           self->wakeDisplay();
           data->state = LV_INDEV_STATE_RELEASED;
         } else {
@@ -362,10 +364,14 @@ public:
 #if !defined(FARO_HEADLESS)
   void wakeDisplay() {
     last_input_ms = millis();
-    if (dimmed && display) {
-      uint8_t bright = store.uiPrefs().brightness_pct >= 80 ? store.uiPrefs().brightness_pct : 100;
-      display->setBacklight(bright);
+    if ((dimmed || screen_off) && display) {
+      // Dimming overwrote the display's backlight value; restore the configured brightness,
+      // then wake the panel (SLPOUT) and the keyboard backlight.
+      display->setBacklight(store.uiPrefs().brightness_pct);
+      display->turnOn();
+      keyboard.setBacklight(store.uiPrefs().kb_backlight);
       dimmed = false;
+      screen_off = false;
       if (lv_screen_active()) {
         lv_obj_invalidate(lv_screen_active());
       }
@@ -435,8 +441,8 @@ public:
 #if !defined(FARO_HEADLESS)
     app.tick(t0);
 
-    // Hardware fast-wake check when dimmed (Trackball click GPIO 0 or GT911 Touch INT GPIO 16)
-    if (dimmed) {
+    // Hardware fast-wake check when dimmed or off (Trackball click GPIO 0 or GT911 Touch INT GPIO 16)
+    if (dimmed || screen_off) {
       if (digitalRead(0) == LOW) {
         wakeDisplay();
       }
@@ -449,9 +455,18 @@ public:
 
     // Idle screen dim after screen_timeout_secs
     uint32_t timeout_ms = uint32_t(store.uiPrefs().screen_timeout_secs) * 1000U;
-    if (!dimmed && timeout_ms > 0 && (t0 - last_input_ms > timeout_ms)) {
+    if (!dimmed && !screen_off && timeout_ms > 0 && (t0 - last_input_ms > timeout_ms)) {
       if (display) display->setBacklight(25);
       dimmed = true;
+    }
+
+    // After dimming, turn the screen fully off (backlight 0 + panel sleep) after a longer idle.
+    // Gated on dim being enabled: "Dim: OFF" keeps the screen on indefinitely.
+    static constexpr uint32_t kScreenOffMs = 300000U;  // 5 min of no input
+    if (dimmed && !screen_off && (t0 - last_input_ms > kScreenOffMs)) {
+      if (display) display->turnOff();
+      keyboard.setBacklight(0);
+      screen_off = true;
     }
 
     lv_timer_handler();

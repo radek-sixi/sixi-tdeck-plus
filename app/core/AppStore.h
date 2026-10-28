@@ -13,7 +13,7 @@ namespace faro::core {
 struct UiPrefs {
   Language language = Language::EN;
   bool     outdoor_high_contrast = true;  // Default: Google Material 3 Light UX
-  uint8_t  brightness_pct = 85;
+  uint8_t  brightness_pct = 70;
   uint8_t  kb_backlight = 128;
   uint16_t screen_timeout_secs = 60;
   bool     quiet_mode = false;

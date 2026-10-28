@@ -189,6 +189,11 @@ void FaroDisplay::turnOn() {
 #else
   applyTDeckAw9364Backlight(pct);
 #endif
+  if (_impl) {
+    _impl->tft.enableSleep(false);  // wake panel (SLPOUT); the next flush redraws
+    delay(5);
+    _impl->tft.enableDisplay(true);
+  }
 }
 
 void FaroDisplay::turnOff() {
@@ -199,6 +204,7 @@ void FaroDisplay::turnOff() {
 #else
   applyTDeckAw9364Backlight(0);
 #endif
+  if (_impl) _impl->tft.enableSleep(true);  // panel sleep (SLPIN): backlight off + controller idle
 }
 
 void FaroDisplay::clear() {

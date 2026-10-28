@@ -795,6 +795,7 @@ bool DeviceMeshActions::setWifiConfig(bool enabled, const char* ssid, const char
     WiFi.begin(_prefs->wifi_ssid, _prefs->wifi_pwd);
   } else if (!enabled) {
     WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);  // power the modem down: disconnect() alone leaves the radio on
     _store.status().wifi_connected = false;
   }
 #endif

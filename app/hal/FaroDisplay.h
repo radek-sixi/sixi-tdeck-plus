@@ -42,6 +42,6 @@ private:
   struct Impl;
   Impl* _impl;
   bool _on = false;
-  uint8_t _backlight_pct = 85;
+  uint8_t _backlight_pct = 70;
 };
 #endif
