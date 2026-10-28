@@ -8,9 +8,8 @@ companion firmware. It runs on the device next to the normal companion interface
   Faro attaches through upstream's `platformio.local.ini` hook and the `AbstractUITask` listener; it adds no
   companion opcodes.
 - **Licence:** Apache-2.0 (see `LICENSE`, `NOTICE`, `LICENSES/`, `docs/THIRD_PARTY.md`).
-- **Status:** 0.10.1, pre-1.0. The latest release binaries are 0.9.2 (see `docs/FLASHING.md`); build from source
-  for 0.10.1. Test it on your own hardware before relying on it. 0.10.1 fixes a T-Deck Plus bootloop in the
-  battery ADC that affected 0.10.0.
+- **Status:** 0.10.1, pre-1.0. Release binaries are 0.10.1 (see `docs/FLASHING.md`). Test it on your own
+  hardware before relying on it. 0.10.1 fixes a T-Deck Plus bootloop in the battery ADC that affected 0.10.0.
 
 ## Screenshots
 
