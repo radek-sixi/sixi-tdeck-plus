@@ -10,8 +10,10 @@ Release files (GitHub release `v0.10.2`):
 
 `<board>` is `tdeck` (T-Deck and T-Deck Plus), `tdeck-max`, `thinknode-m9`, `tbeam-supreme` or `heltec-v3`.
 
-0.10.2 is the first release with the radio regions and the data Faro keeps on flash (both below). It also
-fixes a T-Deck Plus bootloop in the battery ADC that affected 0.10.0; if you still run 0.10.0, update.
+0.10.1 was the first release with the radio regions and the data Faro keeps on flash (both below). It also
+fixed a T-Deck Plus bootloop in the battery ADC that affected 0.10.0; if you still run 0.10.0, update.
+0.10.2 lowers idle power draw: screen off after 5 min idle, lower default brightness, Wi-Fi modem powered
+down when disabled.
 
 ## 0. Back up the device first
 

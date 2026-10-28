@@ -9,7 +9,8 @@ companion firmware. It runs on the device next to the normal companion interface
   companion opcodes.
 - **Licence:** Apache-2.0 (see `LICENSE`, `NOTICE`, `LICENSES/`, `docs/THIRD_PARTY.md`).
 - **Status:** 0.10.2, pre-1.0. Release binaries are 0.10.2 (see `docs/FLASHING.md`). Test it on your own
-  hardware before relying on it. 0.10.2 fixes a T-Deck Plus bootloop in the battery ADC that affected 0.10.0.
+  hardware before relying on it. 0.10.1 fixed a T-Deck Plus bootloop in the battery ADC that affected 0.10.0;
+  0.10.2 lowers idle power draw (screen off after 5 min, dimmer default, Wi-Fi modem off when disabled).
 
 ## Screenshots
 
