@@ -12,6 +12,31 @@ companion firmware. It runs on the device next to the normal companion interface
   hardware before relying on it. 0.10.1 fixed a T-Deck Plus bootloop in the battery ADC that affected 0.10.0;
   0.10.2 lowers idle power draw (screen off after 5 min, dimmer default, Wi-Fi modem off when disabled).
 
+## Download & install
+
+**Firmware:** the [`v0.10.2` release](https://github.com/radek-sixi/sixi-tdeck-plus/releases/tag/v0.10.2)
+has one `.bin` per board, a desktop `.deb` and a firmware bundle. Verify with `sha256sum -c SHA256SUMS`.
+
+T-Deck / T-Deck Plus:
+
+| What | File | Flash at |
+|---|---|---|
+| Full image (first install / recovery) | [`faro-tdeck-0.10.2-merged.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.10.2/faro-tdeck-0.10.2-merged.bin) | `0x0` |
+| App only (update, keeps keys & contacts) | [`faro-tdeck-0.10.2-app.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.10.2/faro-tdeck-0.10.2-app.bin) | `0x10000` |
+
+**Three ways to install:**
+
+1. **Browser, no install (easiest).** Put the T-Deck into download mode (off → hold the trackball → on →
+   release; the screen stays dark), connect USB-C, then flash from Chrome/Edge with any
+   [ESP Web Tools](https://esphome.github.io/esp-web-tools/) flasher — for example
+   [espflasher.app](https://espflasher.app/): choose ESP32-S3, load the `-merged.bin`, flash at `0x0`.
+   (Or paste the CORS-enabled URL from `docs/FLASHING.md`.)
+2. **Command line.** `esptool` — commands, backup, download mode and rollback in
+   [`docs/FLASHING.md`](docs/FLASHING.md).
+3. **From source.** `scripts/link_env.sh && pio run -d external/MeshCore -e faro_tdeck -t upload`.
+
+Step-by-step (back up first, then flash, then verify): **[`docs/FLASHING.md`](docs/FLASHING.md)**.
+
 ## Screenshots
 
 320×240, rendered with `faro-sim` from the same UI code that runs on the device (made-up contacts and messages).

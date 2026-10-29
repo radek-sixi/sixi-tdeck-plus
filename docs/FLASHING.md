@@ -15,6 +15,23 @@ fixed a T-Deck Plus bootloop in the battery ADC that affected 0.10.0; if you sti
 0.10.2 lowers idle power draw: screen off after 5 min idle, lower default brightness, Wi-Fi modem powered
 down when disabled.
 
+## Web flasher (browser, no command line)
+
+You can flash from Chrome or Edge without installing anything, using an
+[ESP Web Tools](https://esphome.github.io/esp-web-tools/) flasher. Put the device in download mode
+(off → hold the trackball → on → release; the screen stays dark), connect USB-C, then in the flasher pick
+**ESP32-S3** and flash the **merged** image at `0x0` (first install) or the **app** image at `0x10000` (update).
+
+- **[espflasher.app](https://espflasher.app/)** — load the downloaded `-merged.bin` file, or paste a URL.
+- Browser flashing by URL needs `Access-Control-Allow-Origin`. The release assets on `github.com` redirect to a
+  host without it, so for URL-based flashing use the CORS-enabled copy on GitHub Pages:
+
+  ```
+  https://radek-sixi.github.io/sixi-tdeck-plus/firmware/v0.10.2/faro-tdeck-0.10.2-merged.bin
+  ```
+
+  (same pattern for the other boards and the `-app.bin`; the Mesh America configurator catalog also lists Faro).
+
 ## 0. Back up the device first
 
 ```bash
