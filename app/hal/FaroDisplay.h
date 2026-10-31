@@ -43,5 +43,6 @@ private:
   Impl* _impl;
   bool _on = false;
   uint8_t _backlight_pct = 70;
+  int _text_size = 2;
 };
 #endif

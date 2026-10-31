@@ -95,7 +95,8 @@ bool FaroDisplay::begin() {
   _impl->tft.setSPISpeed(40000000);
   _impl->tft.fillScreen(ST77XX_BLACK);
   _impl->tft.setTextColor(ST77XX_WHITE);
-  _impl->tft.setTextSize(2);
+  _text_size = 2;
+  _impl->tft.setTextSize(_text_size);
   // Restore FSPI hardware clock to 2 MHz so RadioLib's separate SPIClass instance
   // in target.cpp (which caches _freq=2000000) never transmits to SX1262 at 40 MHz.
   _impl->spi.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
@@ -216,7 +217,8 @@ void FaroDisplay::startFrame(ColorVal) {
 }
 
 void FaroDisplay::setTextSize(int sz) {
-  if (_impl) _impl->tft.setTextSize(sz > 0 ? sz : 1);
+  _text_size = (sz > 0) ? sz : 1;
+  if (_impl) _impl->tft.setTextSize(_text_size);
 }
 
 void FaroDisplay::setColor(ColorVal) {
@@ -224,7 +226,14 @@ void FaroDisplay::setColor(ColorVal) {
 }
 
 void FaroDisplay::setCursor(int x, int y) {
-  if (_impl) _impl->tft.setCursor(x, y);
+  if (_impl) {
+    // Upstream main.cpp passes y=28 (written for a 128x64 OLED); center vertically on 320x240 IPS
+    if (y == 28 && height() >= 200) {
+      int scale = (_text_size > 0) ? _text_size : 1;
+      y = (height() - 8 * scale) / 2;
+    }
+    _impl->tft.setCursor(x, y);
+  }
 }
 
 void FaroDisplay::print(const char* str) {
@@ -243,7 +252,8 @@ void FaroDisplay::drawXbm(int, int, const uint8_t*, int, int) {}
 
 uint16_t FaroDisplay::getTextWidth(const char* str) {
   if (!str) return 0;
-  return uint16_t(strlen(str) * 6);
+  int scale = (_text_size > 0) ? _text_size : 1;
+  return uint16_t(strlen(str) * 6 * scale);
 }
 
 void FaroDisplay::endFrame() {

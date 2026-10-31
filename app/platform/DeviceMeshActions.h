@@ -57,6 +57,7 @@ public:
   bool setRadioConfig(const core::RadioConfig& cfg) override;
   bool setNodeName(const char* name) override;
   bool setWifiConfig(bool enabled, const char* ssid, const char* password) override;
+  size_t scanWifiNetworks(char ssids[][33], int16_t rssis[], size_t max_networks) override;
   bool setBlePin(uint32_t pin) override;
   bool setRepeatEnabled(bool enabled) override;
   bool setDefaultScope(const char* scope_name) override;

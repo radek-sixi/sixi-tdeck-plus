@@ -447,8 +447,21 @@ bool VirtualMeshActions::setWifiConfig(bool enabled, const char* ssid, const cha
   return true;
 }
 
+size_t VirtualMeshActions::scanWifiNetworks(char ssids[][33], int16_t rssis[], size_t max_networks) {
+  static const char* const kDemoSsids[3] = {"Alpine-Hut-WLAN", "Alpine-Hotspot", "Home-WiFi"};
+  static const int16_t kDemoRssis[3] = {-56, -71, -82};
+  if (!ssids || max_networks == 0) return 0;
+  size_t count = max_networks < 3 ? max_networks : 3;
+  for (size_t i = 0; i < count; ++i) {
+    strncpy(ssids[i], kDemoSsids[i], 32);
+    ssids[i][32] = '\0';
+    if (rssis) rssis[i] = kDemoRssis[i];
+  }
+  return count;
+}
+
 bool VirtualMeshActions::setBlePin(uint32_t pin) {
-  if (pin < 100000 || pin > 999999) return false;
+  if (pin != 0 && (pin < 100000 || pin > 999999)) return false;
   _store.status().ble_pin = pin;
   _store.bumpVersion();
   return true;

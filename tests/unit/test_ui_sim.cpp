@@ -262,6 +262,38 @@ int main() {
   assert(actions.importSettingsFromSd());
   assert(strcmp(store.status().node_name, "Faro T-Deck") == 0);
 
+  // Test Wi-Fi network scanning
+  char scan_ssids[8][33] = {{0}};
+  int16_t scan_rssis[8] = {0};
+  size_t scan_cnt = actions.scanWifiNetworks(scan_ssids, scan_rssis, 8);
+  assert(scan_cnt == 3);
+  assert(strcmp(scan_ssids[0], "Alpine-Hut-WLAN") == 0);
+
+  // Test that typing in a textbox on one screen does NOT leak across screens
+  app.openChannelThread(0);
+  const size_t msg_cnt_before = store.messageCount();
+  app.onKeyPress('9');
+  app.onKeyPress('8');
+  app.onKeyPress('7');
+  // Switch to Home and then back to ChannelThread without sending: draft must be cleared on screen switch
+  app.showScreen(faro::ui::ScreenId::Home);
+  app.openChannelThread(0);
+  app.onKeyPress('\r');  // pressing Enter on empty box should not send "987"
+  assert(store.messageCount() == msg_cnt_before);
+
+  // Test rendering a message containing UTF-8 emojis in ChannelThread
+  faro::core::MessageRecord emo_msg{};
+  emo_msg.is_channel = true;
+  emo_msg.channel_index = 0;
+  strncpy(emo_msg.sender_name, "AlpinePeer", sizeof(emo_msg.sender_name) - 1);
+  strncpy(emo_msg.text, "Hello \xF0\x9F\x99\x82 \xF0\x9F\x91\x8D \xE2\x9D\xA4\xEF\xB8\x8F!", sizeof(emo_msg.text) - 1);
+  emo_msg.valid = true;
+  store.appendMessage(emo_msg);
+  app.openChannelThread(0);
+  lv_tick_inc(25);
+  lv_timer_handler();
+  lv_refr_now(disp);
+
   printf("[PASS] test_ui_sim (all screens x 4 languages)\n");
   return 0;
 }

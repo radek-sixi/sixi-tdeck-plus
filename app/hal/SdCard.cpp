@@ -305,6 +305,10 @@ void SdCard::discoverMapTiles() {
 bool SdCard::ensureFaroDirs() {
 #ifdef ARDUINO
   if (!_mounted) return false;
+#if defined(LILYGO_TDECK)
+  digitalWrite(9, HIGH);
+  digitalWrite(12, HIGH);
+#endif
   if (!SD.exists("/faro")) SD.mkdir("/faro");
   if (!SD.exists("/faro/logs")) SD.mkdir("/faro/logs");
   if (!SD.exists("/faro/maps")) SD.mkdir("/faro/maps");
@@ -345,14 +349,44 @@ bool SdCard::writeFile(const char* path, const uint8_t* data, size_t len) {
 #ifdef ARDUINO
   if (!path || !data) return false;
   if (!_mounted && !begin()) return false;
+#if defined(LILYGO_TDECK)
+  digitalWrite(9, HIGH);
+  digitalWrite(12, HIGH);
+#endif
   ensureFaroDirs();
   if (SD.exists(path)) {
     SD.remove(path);
   }
   File f = SD.open(path, FILE_WRITE);
-  if (!f) return false;
+  if (!f) {
+    // Card may have been re-inserted or shared SPI clock disturbed: re-mount once and retry
+    if (begin()) {
+#if defined(LILYGO_TDECK)
+      digitalWrite(9, HIGH);
+      digitalWrite(12, HIGH);
+#endif
+      ensureFaroDirs();
+      if (SD.exists(path)) SD.remove(path);
+      f = SD.open(path, FILE_WRITE);
+    }
+  }
+  if (!f) {
+#if defined(LILYGO_TDECK)
+    digitalWrite(kPinCs, HIGH);
+    SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+    SPI.endTransaction();
+#endif
+    return false;
+  }
   size_t written = f.write(data, len);
+  f.flush();
   f.close();
+  _used_mb = uint32_t(SD.usedBytes() / (1024ULL * 1024ULL));
+#if defined(LILYGO_TDECK)
+  digitalWrite(kPinCs, HIGH);
+  SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+  SPI.endTransaction();
+#endif
   return written == len;
 #else
   (void)path; (void)data; (void)len;
@@ -364,11 +398,27 @@ bool SdCard::appendLine(const char* path, const char* line) {
 #ifdef ARDUINO
   if (!path || !line) return false;
   if (!_mounted && !begin()) return false;
+#if defined(LILYGO_TDECK)
+  digitalWrite(9, HIGH);
+  digitalWrite(12, HIGH);
+#endif
   ensureFaroDirs();
   File f = SD.open(path, FILE_APPEND);
-  if (!f) return false;
+  if (!f) {
+#if defined(LILYGO_TDECK)
+    digitalWrite(kPinCs, HIGH);
+    SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+    SPI.endTransaction();
+#endif
+    return false;
+  }
   f.println(line);
   f.close();
+#if defined(LILYGO_TDECK)
+  digitalWrite(kPinCs, HIGH);
+  SPI.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+  SPI.endTransaction();
+#endif
   return true;
 #else
   (void)path; (void)line;

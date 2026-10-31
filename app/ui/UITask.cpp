@@ -436,6 +436,7 @@ public:
       actions.resendDirectMessage(resend_id);
     }
     persist(t0);
+    buzzer.setQuiet(store.uiPrefs().quiet_mode);
     buzzer.loop(t0);
 
 #if !defined(FARO_HEADLESS)

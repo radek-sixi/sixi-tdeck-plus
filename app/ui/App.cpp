@@ -75,6 +75,99 @@ lv_obj_t* createAvatarCircle(lv_obj_t* parent, const char* name, uint8_t key_byt
   return av;
 }
 
+// Translates common UTF-8 emoji sequences into readable ASCII emoticons/badges so messages from
+// mobile apps render cleanly with the embedded 1-bit/4-bit bitmap fonts.
+void formatEmojiText(const char* in, char* out, size_t max_len) {
+  if (!out || max_len == 0) return;
+  if (!in) {
+    out[0] = '\0';
+    return;
+  }
+  struct EmojiMap {
+    const char* utf8;
+    const char* repl;
+  };
+  static const EmojiMap kMap[] = {
+    {"\xF0\x9F\x98\x80", ":)"},     // 😀
+    {"\xF0\x9F\x98\x83", ":D"},     // 😃
+    {"\xF0\x9F\x98\x84", ":D"},     // 😄
+    {"\xF0\x9F\x98\x81", ":D"},     // 😁
+    {"\xF0\x9F\x98\x82", ":'D"},    // 😂
+    {"\xF0\x9F\xA4\xA3", "ROFL"},   // 🤣
+    {"\xF0\x9F\x98\x89", ";)"},     // 😉
+    {"\xF0\x9F\x98\x8A", ":)"},     // 😊
+    {"\xF0\x9F\x99\x82", ":)"},     // 🙂
+    {"\xF0\x9F\x98\x8E", "B)"},     // 😎
+    {"\xF0\x9F\x98\x94", ":("},     // 😔
+    {"\xF0\x9F\x98\xA2", ":'("},    // 😢
+    {"\xF0\x9F\x98\xAD", "T_T"},    // 😭
+    {"\xF0\x9F\x98\xA1", ">:("},    // 😡
+    {"\xF0\x9F\xA4\x94", "(?)"},    // 🤔
+    {"\xF0\x9F\x91\x8D", "[+1]"},   // 👍
+    {"\xF0\x9F\x91\x8E", "[-1]"},   // 👎
+    {"\xF0\x9F\x91\x8C", "[OK]"},   // 👌
+    {"\xF0\x9F\x91\x8B", "[Hi]"},   // 👋
+    {"\xF0\x9F\x99\x8F", "[Thx]"},  // 🙏
+    {"\xE2\x9D\xA4\xEF\xB8\x8F", "<3"}, // ❤️
+    {"\xE2\x9D\xA4", "<3"},         // ❤
+    {"\xF0\x9F\x92\x99", "<3"},     // 💙
+    {"\xF0\x9F\x92\x9A", "<3"},     // 💚
+    {"\xF0\x9F\x94\xA5", "[*]"},    // 🔥
+    {"\xE2\x9A\xA0\xEF\xB8\x8F", "[!]"}, // ⚠️
+    {"\xE2\x9A\xA0", "[!]"},        // ⚠
+    {"\xE2\x9C\x85", "[OK]"},       // ✅
+    {"\xE2\x9C\x94\xEF\xB8\x8F", "[OK]"}, // ✔️
+    {"\xE2\x9C\x94", "[OK]"},       // ✔
+    {"\xE2\x9D\x8C", "[X]"},        // ❌
+    {"\xF0\x9F\x86\x98", "[SOS]"},  // 🆘
+    {"\xF0\x9F\x93\x8D", "[PIN]"},  // 📍
+    {"\xF0\x9F\x93\xA1", "[RF]"},   // 📡
+    {"\xF0\x9F\x94\x8B", "[BAT]"},  // 🔋
+    {"\xE2\x9B\xB0\xEF\xB8\x8F", "[MTN]"}, // ⛰️
+    {"\xE2\x9B\xB0", "[MTN]"},      // ⛰
+  };
+
+  size_t o = 0;
+  const char* p = in;
+  while (*p && o + 1 < max_len) {
+    bool matched = false;
+    for (const auto& m : kMap) {
+      size_t ulen = strlen(m.utf8);
+      if (strncmp(p, m.utf8, ulen) == 0) {
+        size_t rlen = strlen(m.repl);
+        if (o + rlen < max_len) {
+          memcpy(out + o, m.repl, rlen);
+          o += rlen;
+        }
+        p += ulen;
+        matched = true;
+        break;
+      }
+    }
+    if (matched) continue;
+    // Strip Variation Selector-16 (U+FE0F = EF B8 8F) if left over
+    if (static_cast<uint8_t>(p[0]) == 0xEF &&
+        static_cast<uint8_t>(p[1]) == 0xB8 &&
+        static_cast<uint8_t>(p[2]) == 0x8F) {
+      p += 3;
+      continue;
+    }
+    // Fallback for any other 4-byte supplementary plane emoji (F0 9F xx xx)
+    if (static_cast<uint8_t>(p[0]) == 0xF0 &&
+        (static_cast<uint8_t>(p[1]) & 0xF0) == 0x90 &&
+        p[1] && p[2] && p[3]) {
+      if (o + 3 < max_len) {
+        memcpy(out + o, "[*]", 3);
+        o += 3;
+      }
+      p += 4;
+      continue;
+    }
+    out[o++] = *p++;
+  }
+  out[o] = '\0';
+}
+
 lv_obj_t* createHeaderRow(lv_obj_t* parent, const char* title, bool outdoor,
                           lv_event_cb_t back_cb, void* user_data) {
   const auto& p = Theme::palette(outdoor);
@@ -87,22 +180,38 @@ lv_obj_t* createHeaderRow(lv_obj_t* parent, const char* title, bool outdoor,
   lv_obj_set_style_pad_hor(hdr, 4, 0);
   lv_obj_set_style_pad_ver(hdr, 2, 0);
   lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_set_flex_align(hdr, back_cb ? LV_FLEX_ALIGN_SPACE_BETWEEN : LV_FLEX_ALIGN_CENTER,
+                        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
   lv_obj_remove_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
   if (back_cb) {
     lv_obj_t* back_btn = lv_button_create(hdr);
-    lv_obj_set_size(back_btn, 58, 26);
+    lv_obj_set_size(back_btn, 48, 26);
     Theme::styleTouchButton(back_btn, p.accent, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(back_btn, back_cb, LV_EVENT_CLICKED, user_data);
     lv_obj_t* bl = lv_label_create(back_btn);
     lv_obj_set_style_text_font(bl, &faro_font_12, 0);
-    lv_label_set_text(bl, "< Back");
+    lv_label_set_text(bl, "<Back");
     lv_obj_center(bl);
+
+    if (user_data) {
+      lv_obj_t* home_btn = lv_button_create(hdr);
+      lv_obj_set_size(home_btn, 46, 26);
+      Theme::styleTouchButton(home_btn, p.surface, p.accent);
+      lv_obj_add_event_cb(home_btn, [](lv_event_t* e) {
+        auto* self = static_cast<App*>(lv_event_get_user_data(e));
+        if (self) self->showScreen(ScreenId::Home);
+      }, LV_EVENT_CLICKED, user_data);
+      lv_obj_t* hl = lv_label_create(home_btn);
+      lv_obj_set_style_text_font(hl, &faro_font_12, 0);
+      lv_label_set_text(hl, "Home");
+      lv_obj_center(hl);
+    }
   }
 
   lv_obj_t* t_lbl = lv_label_create(hdr);
-  lv_obj_set_width(t_lbl, 168);
+  lv_obj_set_width(t_lbl, back_cb ? 124 : 296);
+  lv_obj_set_style_text_align(t_lbl, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_set_style_text_font(t_lbl, &faro_font_14, 0);
   lv_obj_set_style_text_color(t_lbl, p.text_primary, 0);
   lv_label_set_text(t_lbl, title);
@@ -388,6 +497,10 @@ void App::showScreen(ScreenId id) {
   _channel_thread_subpage = false;
   _discover_subpage = false;
   _contacts_subpage = false;
+  // Clear draft text on screen switch so sensitive inputs (BLE PIN, WiFi pwd, etc.) never leak across screens
+  _draft_text[0] = '\0';
+  _draft_key = 0xFFFFFFFFU;
+  _compose_key = 0xFFFFFFFFU;
   if (_input_group) {
     lv_group_remove_all_objs(_input_group);
   }
@@ -721,7 +834,9 @@ void App::updateStatusBar() {
   const auto& up = _store.uiPrefs();
   // Region, then the strongest repeater heard lately (shown only: MeshCore routes as always)
   char left_buf[96] = {0};
-  snprintf(left_buf, sizeof(left_buf), "%.8s%s%s|%.9s|%s%.6s",
+  const char* home_prefix = (_current_screen != ScreenId::Home) ? "[Home] " : "";
+  snprintf(left_buf, sizeof(left_buf), "%s%.8s%s%s|%.9s|%s%.6s",
+           home_prefix,
            st.node_name,
            up.bot_mode == 1 ? "[PING]" : (up.bot_mode == 2 ? "[AWAY]" : ""),
            up.deadman_mode ? "[DM]" : "",
@@ -755,18 +870,38 @@ bool App::confirmTap(int action_id, const char* warning) {
 }
 
 uint32_t App::draftKey() const {
-  return (uint32_t(_current_screen) << 24) ^ (uint32_t(_selected_contact_idx & 0xFFF) << 12) ^
-         uint32_t(_selected_channel_idx & 0xFFF);
+  uint32_t sub = (uint32_t(_settings_tab & 0x0F) << 8) |
+                 (uint32_t(_wifi_edit_pwd ? 1 : 0) << 7) |
+                 (uint32_t(_settings_hub ? 1 : 0) << 6) |
+                 (uint32_t(_contact_detail_tab & 0x07) << 3) |
+                 (uint32_t(_home_subpage || _chats_subpage || _channels_subpage || _channel_thread_subpage) << 2) |
+                 (uint32_t(_screen_locked ? 1 : 0));
+  return (uint32_t(_current_screen) << 24) ^
+         (uint32_t(_selected_contact_idx & 0xFF) << 16) ^
+         (uint32_t(_selected_channel_idx & 0x0F) << 12) ^
+         sub;
 }
 
 void App::renderBody() {
   if (!_body) return;
-  if (_compose_ta) {
-    const char* cur = lv_textarea_get_text(_compose_ta);
-    strncpy(_draft_text, cur ? cur : "", sizeof(_draft_text) - 1);
-    _draft_text[sizeof(_draft_text) - 1] = '\0';
-    _draft_key = _compose_key;
-    _draft_focused = _input_group && lv_group_get_focused(_input_group) == _compose_ta;
+  const uint32_t next_key = draftKey();
+  if (_compose_ta && _compose_key == next_key) {
+    // Only preserve draft text when re-rendering the exact same view/tab, and never for password/PIN fields
+    bool is_pwd = lv_textarea_get_password_mode(_compose_ta) ||
+                  (_current_screen == ScreenId::Settings && _settings_tab == 5);
+    if (!is_pwd) {
+      const char* cur = lv_textarea_get_text(_compose_ta);
+      strncpy(_draft_text, cur ? cur : "", sizeof(_draft_text) - 1);
+      _draft_text[sizeof(_draft_text) - 1] = '\0';
+      _draft_key = _compose_key;
+      _draft_focused = _input_group && lv_group_get_focused(_input_group) == _compose_ta;
+    } else {
+      _draft_text[0] = '\0';
+      _draft_key = 0xFFFFFFFFU;
+    }
+  } else {
+    _draft_text[0] = '\0';
+    _draft_key = 0xFFFFFFFFU;
   }
   lv_obj_clean(_body);
   _compose_ta = nullptr;
@@ -789,13 +924,10 @@ void App::renderBody() {
   }
 
   if (_compose_ta) {
-    if (_draft_key == draftKey() && _draft_text[0]) {
+    if (_draft_key == next_key && _draft_text[0]) {
       lv_textarea_set_text(_compose_ta, _draft_text);
     }
-    if (_draft_key == draftKey() && _draft_focused && _input_group) {
-      lv_group_focus_obj(_compose_ta);
-    }
-    _compose_key = draftKey();
+    _compose_key = next_key;
     const auto& p = Theme::palette(_store.uiPrefs().outdoor_high_contrast);
     lv_obj_set_style_bg_color(_compose_ta, p.surface, 0);
     lv_obj_set_style_bg_opa(_compose_ta, LV_OPA_COVER, 0);
@@ -804,6 +936,35 @@ void App::renderBody() {
     lv_obj_set_style_border_color(_compose_ta, p.border, 0);
     lv_obj_set_style_border_width(_compose_ta, 1, 0);
     lv_obj_set_style_radius(_compose_ta, 8, 0);
+
+    // Clear visual focus indicator on the textbox (2px accent border + focus ring)
+    lv_obj_set_style_border_color(_compose_ta, p.accent, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_width(_compose_ta, 2, LV_STATE_FOCUSED);
+    lv_obj_set_style_border_color(_compose_ta, p.accent, LV_STATE_FOCUS_KEY);
+    lv_obj_set_style_border_width(_compose_ta, 2, LV_STATE_FOCUS_KEY);
+    Theme::styleFocusRing(_compose_ta);
+
+    // High-contrast blinking cursor that contrasts in both Light and Dark themes
+    const lv_style_selector_t cur_sel =
+        lv_style_selector_t(LV_PART_CURSOR) | lv_style_selector_t(LV_STATE_FOCUSED);
+    lv_obj_set_style_bg_color(_compose_ta, p.accent, cur_sel);
+    lv_obj_set_style_bg_opa(_compose_ta, LV_OPA_30, cur_sel);
+    lv_obj_set_style_text_color(_compose_ta, p.text_primary, cur_sel);
+    lv_obj_set_style_border_color(_compose_ta, p.accent, cur_sel);
+    lv_obj_set_style_border_width(_compose_ta, 2, cur_sel);
+    lv_obj_set_style_border_side(_compose_ta, LV_BORDER_SIDE_LEFT, cur_sel);
+
+    // Focus the textbox on touch click and ensure it is focused when present
+    if (_input_group) {
+      lv_group_focus_obj(_compose_ta);
+    }
+    lv_obj_add_event_cb(_compose_ta, [](lv_event_t* e) {
+      auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      auto* ta = static_cast<lv_obj_t*>(lv_event_get_target(e));
+      if (self && self->_input_group && ta) {
+        lv_group_focus_obj(ta);
+      }
+    }, LV_EVENT_CLICKED, this);
   }
 }
 
@@ -855,11 +1016,13 @@ void App::buildHomeView(lv_obj_t* parent) {
     lv_obj_set_style_text_font(mlbl, &faro_font_12, 0);
     lv_obj_set_style_text_color(mlbl, p.text_primary, 0);
     if (last_msg) {
+      char emoji_txt[180] = {0};
+      formatEmojiText(last_msg->text, emoji_txt, sizeof(emoji_txt));
       lv_label_set_text_fmt(mlbl, "%s (%s, %uh):\n%s",
                             last_msg->sender_name[0] ? last_msg->sender_name : "Peer",
                             last_msg->is_channel ? "Channel" : "DM",
                             unsigned(last_msg->hops),
-                            last_msg->text);
+                            emoji_txt);
     } else {
       lv_label_set_text(mlbl, "Radio listening in background.\nType & press Enter for Quick Reply.");
     }
@@ -1440,8 +1603,10 @@ void App::buildChatsView(lv_obj_t* parent) {
         lv_obj_set_style_text_font(info, &faro_font_12, 0);
         lv_obj_set_style_text_color(info, p.text_primary, 0);
         if (last_msg) {
+          char emoji_txt[180] = {0};
+          formatEmojiText(last_msg->text, emoji_txt, sizeof(emoji_txt));
           lv_label_set_text_fmt(info, "[%u] %s | %s: %s",
-                                unsigned(ch.index), ch.name, last_msg->sender_name, last_msg->text);
+                                unsigned(ch.index), ch.name, last_msg->sender_name, emoji_txt);
         } else {
           lv_label_set_text_fmt(info, "[%u] %s (%s) — Public/Group",
                                 unsigned(ch.index), ch.name, ch.is_hashtag ? "#Tag" : "Chan");
@@ -1649,14 +1814,48 @@ void App::buildChatThreadView(lv_obj_t* parent) {
   lv_label_set_text(ol, "Options");
   lv_obj_center(ol);
 
-  // Optional Canned / Diacritics / Clipboard Drawer (when _show_compose_helper == true)
+  // Optional Canned / Emoticons / Diacritics / Clipboard Drawer (when _show_compose_helper == true)
   if (_show_compose_helper) {
     lv_obj_t* hbox = lv_obj_create(parent);
-    lv_obj_set_size(hbox, 308, 96);
+    lv_obj_set_size(hbox, 308, 124);
     Theme::styleCard(hbox, outdoor);
     lv_obj_set_style_pad_all(hbox, 3, 0);
     lv_obj_set_flex_flow(hbox, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(hbox, 3, 0);
+
+    // Quick Emoticon bar
+    lv_obj_t* ebar = lv_obj_create(hbox);
+    lv_obj_set_size(ebar, 294, 24);
+    lv_obj_set_style_bg_opa(ebar, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ebar, 0, 0);
+    lv_obj_set_style_pad_all(ebar, 0, 0);
+    lv_obj_set_flex_flow(ebar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(ebar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_remove_flag(ebar, LV_OBJ_FLAG_SCROLLABLE);
+
+    static const char* kEmoticons[6] = {" :) ", " :D ", " <3 ", " [+1] ", " [OK] ", " [SOS] "};
+    static const char* kEmoLabels[6] = {":)", ":D", "<3", "+1", "OK", "SOS"};
+    struct EmoCtx { App* app; const char* s; };
+    static EmoCtx s_ectx[6];
+    for (int e_i = 0; e_i < 6; ++e_i) {
+      lv_obj_t* eb = lv_button_create(ebar);
+      lv_obj_set_size(eb, 46, 22);
+      Theme::styleTouchButton(eb, p.surface_alt, p.accent);
+      s_ectx[e_i] = {this, kEmoticons[e_i]};
+      lv_obj_add_event_cb(eb, [](lv_event_t* e) {
+        auto* ctx = static_cast<EmoCtx*>(lv_event_get_user_data(e));
+        App* a = ctx->app;
+        if (a->_compose_ta) {
+          lv_textarea_add_text(a->_compose_ta, ctx->s);
+        }
+        a->_show_compose_helper = false;
+        a->renderBody();
+      }, LV_EVENT_CLICKED, &s_ectx[e_i]);
+      lv_obj_t* elbl = lv_label_create(eb);
+      lv_obj_set_style_text_font(elbl, &faro_font_12, 0);
+      lv_label_set_text(elbl, kEmoLabels[e_i]);
+      lv_obj_center(elbl);
+    }
 
     // Diacritics & Clipboard bar
     lv_obj_t* dbar = lv_obj_create(hbox);
@@ -1733,6 +1932,9 @@ void App::buildChatThreadView(lv_obj_t* parent) {
       if (!m.valid || m.is_channel) continue;
       if (memcmp(m.peer_prefix, peer->pub_key, 6) != 0) continue;
 
+      char emoji_txt[180] = {0};
+      formatEmojiText(m.text, emoji_txt, sizeof(emoji_txt));
+
       lv_obj_t* bubble = lv_label_create(msg_box);
       lv_obj_set_width(bubble, 290);
       lv_label_set_long_mode(bubble, LV_LABEL_LONG_WRAP);
@@ -1744,24 +1946,24 @@ void App::buildChatThreadView(lv_obj_t* parent) {
         unsigned heard_cnt = unsigned(m.repeats_heard + (m.delivery_state == DeliveryState::DeliveredAck ? 1 : 0));
         if (show_ts) {
           lv_label_set_text_fmt(bubble, "[%02u:%02u] Me [%s | Heard x%u]: %s",
-                                unsigned(hh), unsigned(mm), deliveryBadge(m.delivery_state), heard_cnt, m.text);
+                                unsigned(hh), unsigned(mm), deliveryBadge(m.delivery_state), heard_cnt, emoji_txt);
         } else {
-          lv_label_set_text_fmt(bubble, "Me [%s | Heard x%u]: %s", deliveryBadge(m.delivery_state), heard_cnt, m.text);
+          lv_label_set_text_fmt(bubble, "Me [%s | Heard x%u]: %s", deliveryBadge(m.delivery_state), heard_cnt, emoji_txt);
         }
       } else {
         if (show_ts) {
           lv_label_set_text_fmt(bubble, "[%02u:%02u] %s (%s%uh): %s",
                                 unsigned(hh), unsigned(mm), m.sender_name,
-                                m.hops == 0 ? "->" : "", unsigned(m.hops), m.text);
+                                m.hops == 0 ? "->" : "", unsigned(m.hops), emoji_txt);
         } else {
-          lv_label_set_text_fmt(bubble, "%s (%uh): %s", m.sender_name, unsigned(m.hops), m.text);
+          lv_label_set_text_fmt(bubble, "%s (%uh): %s", m.sender_name, unsigned(m.hops), emoji_txt);
         }
       }
     }
     lv_obj_scroll_to_y(msg_box, LV_COORD_MAX, LV_ANIM_OFF);
   }
 
-  // Bottom compose bar: Textarea (150 char limit) + [Canned/Ä] + [Send] (34px tall)
+  // Bottom compose bar: Textarea (150 char limit) + [:) / Can] + [Send] (34px tall)
   lv_obj_t* comp = lv_obj_create(parent);
   lv_obj_set_size(comp, 308, 34);
   lv_obj_set_style_bg_opa(comp, LV_OPA_TRANSP, 0);
@@ -1789,7 +1991,7 @@ void App::buildChatThreadView(lv_obj_t* parent) {
   }, LV_EVENT_CLICKED, this);
   lv_obj_t* cl = lv_label_create(can_btn);
   lv_obj_set_style_text_font(cl, &faro_font_12, 0);
-  lv_label_set_text(cl, "Can/ä");
+  lv_label_set_text(cl, ":) / Can");
   lv_obj_center(cl);
 
   lv_obj_t* send_btn = lv_button_create(comp);
@@ -2161,15 +2363,18 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
     if (_store.uiPrefs().mention_only_filter && !is_mention) continue;
 
     ++shown_msgs;
+    char emoji_txt[180] = {0};
+    formatEmojiText(m.text, emoji_txt, sizeof(emoji_txt));
+
     lv_obj_t* lbl = lv_label_create(msg_box);
     lv_obj_set_width(lbl, 290);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(lbl, &faro_font_12, 0);
     lv_obj_set_style_text_color(lbl, is_mention ? p.warning : (m.outgoing ? p.accent : p.text_primary), 0);
     if (m.outgoing) {
-      lv_label_set_text_fmt(lbl, "%s [Heard x%u]: %s", m.sender_name, unsigned(m.repeats_heard + 1), m.text);
+      lv_label_set_text_fmt(lbl, "%s [Heard x%u]: %s", m.sender_name, unsigned(m.repeats_heard + 1), emoji_txt);
     } else {
-      lv_label_set_text_fmt(lbl, "%s%u> %s: %s", is_mention ? "@! " : "", unsigned(m.hops), m.sender_name, m.text);
+      lv_label_set_text_fmt(lbl, "%s%u> %s: %s", is_mention ? "@! " : "", unsigned(m.hops), m.sender_name, emoji_txt);
       if (rep_slot < 32) {
         s_rep_ctx[rep_slot] = {this, m.sender_name};
         lv_obj_add_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
@@ -3230,6 +3435,67 @@ void App::buildMapView(lv_obj_t* parent) {
   lv_obj_t* canvas = lv_canvas_create(parent);
   lv_canvas_set_buffer(canvas, _map_canvas_buf, 308, 138, LV_COLOR_FORMAT_RGB565);
   lv_obj_set_size(canvas, 308, 138);
+  lv_obj_add_flag(canvas, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_remove_flag(canvas, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Touch drag/pan directly on the map canvas
+  lv_obj_add_event_cb(canvas, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    lv_indev_t* indev = lv_indev_active();
+    if (!self || !indev) return;
+    lv_point_t pt;
+    lv_indev_get_point(indev, &pt);
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED) {
+      self->_map_drag_last_x = int16_t(pt.x);
+      self->_map_drag_last_y = int16_t(pt.y);
+      self->_map_drag_moved = false;
+    } else if (code == LV_EVENT_PRESSING) {
+      int16_t dx = int16_t(pt.x) - self->_map_drag_last_x;
+      int16_t dy = int16_t(pt.y) - self->_map_drag_last_y;
+      if (dx * dx + dy * dy >= 16) {
+        self->_map_drag_last_x = int16_t(pt.x);
+        self->_map_drag_last_y = int16_t(pt.y);
+        self->_map_drag_moved = true;
+        int z = self->_map_zoom < 1 ? 1 : (self->_map_zoom > 18 ? 18 : self->_map_zoom);
+        double deg_per_px = 360.0 / double(256U << z);
+        self->_map_pan_lon_offset -= double(dx) * deg_per_px;
+        self->_map_pan_lat_offset += double(dy) * deg_per_px * 0.70;
+
+        // Re-render tile viewport in-place during drag without destroying the canvas object
+        double b_lat = self->_store.regionInfo().map_lat;
+        double b_lon = self->_store.regionInfo().map_lon;
+        double s_lat = 0.0, s_lon = 0.0;
+        int s_z = -1;
+        bool has_sd = self->_tiles.getDefaultTileCenter(s_lat, s_lon, s_z);
+        if (self->_store.gps().valid) {
+          b_lat = self->_store.gps().lat_deg;
+          b_lon = self->_store.gps().lon_deg;
+        } else if (self->_store.status().manual_lat_deg != 0.0 || self->_store.status().manual_lon_deg != 0.0) {
+          b_lat = self->_store.status().manual_lat_deg;
+          b_lon = self->_store.status().manual_lon_deg;
+        } else if (has_sd) {
+          int tx = 0, ty = 0, px = 0, py = 0;
+          geomath::latLonToTilePixel(b_lat, b_lon, self->_map_zoom, tx, ty, px, py);
+          if (!self->_tiles.hasTile(self->_map_zoom, tx, ty)) {
+            b_lat = s_lat;
+            b_lon = s_lon;
+          }
+        }
+        self->_tiles.renderViewportRgb565(
+            b_lat + self->_map_pan_lat_offset,
+            b_lon + self->_map_pan_lon_offset,
+            self->_map_zoom, self->_map_canvas_buf, 308, 138,
+            self->_store.uiPrefs().outdoor_high_contrast);
+        lv_obj_invalidate(static_cast<lv_obj_t*>(lv_event_get_target(e)));
+      }
+    } else if (code == LV_EVENT_RELEASED) {
+      if (self->_map_drag_moved) {
+        self->_map_drag_moved = false;
+        self->renderBody();
+      }
+    }
+  }, LV_EVENT_ALL, this);
 
   // Overlay GPS Track info & elevation badge + [GPX] export if enabled (Ripple UI p.31-33)
   if (_show_tracks_overlay && trk.point_count > 0) {
@@ -3363,30 +3629,24 @@ void App::buildMapView(lv_obj_t* parent) {
     lv_label_set_text_fmt(coord, "Z%d %s", _map_zoom, ll);
   }
 
-  const char* kMapBtns[7] = {"<", "^", "v", ">", g.valid ? "GPS" : "Ctr", "-", "+"};
+  const char* kMapBtns[3] = {g.valid ? "GPS" : "Ctr", "-", "+"};
   struct MapBtnCtx { App* app; int idx; };
-  static MapBtnCtx s_mctx[7];
-  for (int b = 0; b < 7; ++b) {
+  static MapBtnCtx s_mctx[3];
+  for (int b = 0; b < 3; ++b) {
     lv_obj_t* mb = lv_button_create(hud);
-    lv_obj_set_size(mb, b == 4 ? 28 : 19, 20);
-    Theme::styleTouchButton(mb, (b == 5 || b == 6) ? p.accent : p.surface_alt,
-                            (b == 5 || b == 6) ? lv_color_hex(0xFFFFFF) : p.text_primary);
+    lv_obj_set_size(mb, b == 0 ? 44 : 36, 22);
+    Theme::styleTouchButton(mb, (b == 1 || b == 2) ? p.accent : p.surface_alt,
+                            (b == 1 || b == 2) ? lv_color_hex(0xFFFFFF) : p.text_primary);
     s_mctx[b] = {this, b};
     lv_obj_add_event_cb(mb, [](lv_event_t* e) {
       auto* ctx = static_cast<MapBtnCtx*>(lv_event_get_user_data(e));
       App* a = ctx->app;
-      double step = 0.015 * (13 - (a->_map_zoom > 12 ? 12 : a->_map_zoom));
-      if (step < 0.003) step = 0.003;
-      if (ctx->idx == 0) a->_map_pan_lon_offset -= step;
-      else if (ctx->idx == 1) a->_map_pan_lat_offset += step;
-      else if (ctx->idx == 2) a->_map_pan_lat_offset -= step;
-      else if (ctx->idx == 3) a->_map_pan_lon_offset += step;
-      else if (ctx->idx == 4) {
+      if (ctx->idx == 0) {
         a->_map_pan_lat_offset = 0.0;
         a->_map_pan_lon_offset = 0.0;
-      } else if (ctx->idx == 5) {
+      } else if (ctx->idx == 1) {
         a->_map_zoom = (a->_map_zoom <= 4) ? 17 : (a->_map_zoom - 1);
-      } else if (ctx->idx == 6) {
+      } else if (ctx->idx == 2) {
         a->_map_zoom = (a->_map_zoom >= 17) ? 4 : (a->_map_zoom + 1);
       }
       a->renderBody();
@@ -3461,7 +3721,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
   }
 
   // Full-height Category Header Bar when inside a specific Settings subpage (_settings_hub == false):
-  // [< Categories (96x28)]   Category Title   [Next > (74x28)]
+  // [< Cat (62x28)] [Home (52x28)]   Category Title   [Next > (58x28)]
   lv_obj_t* sbar = lv_obj_create(parent);
   lv_obj_set_size(sbar, 308, 30);
   lv_obj_set_style_bg_opa(sbar, LV_OPA_TRANSP, 0);
@@ -3472,7 +3732,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
   lv_obj_remove_flag(sbar, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t* back_hub_btn = lv_button_create(sbar);
-  lv_obj_set_size(back_hub_btn, 96, 28);
+  lv_obj_set_size(back_hub_btn, 62, 28);
   Theme::styleTouchButton(back_hub_btn, p.accent, lv_color_hex(0xFFFFFF));
   lv_obj_add_event_cb(back_hub_btn, [](lv_event_t* e) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -3483,13 +3743,25 @@ void App::buildSettingsView(lv_obj_t* parent) {
   }, LV_EVENT_CLICKED, this);
   lv_obj_t* bhl = lv_label_create(back_hub_btn);
   lv_obj_set_style_text_font(bhl, &faro_font_12, 0);
-  lv_label_set_text(bhl, "< Categories");
+  lv_label_set_text(bhl, "< Cat");
   lv_obj_center(bhl);
 
+  lv_obj_t* shome_btn = lv_button_create(sbar);
+  lv_obj_set_size(shome_btn, 52, 28);
+  Theme::styleTouchButton(shome_btn, p.surface_alt, p.accent);
+  lv_obj_add_event_cb(shome_btn, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (self) self->showScreen(ScreenId::Home);
+  }, LV_EVENT_CLICKED, this);
+  lv_obj_t* shl = lv_label_create(shome_btn);
+  lv_obj_set_style_text_font(shl, &faro_font_12, 0);
+  lv_label_set_text(shl, "Home");
+  lv_obj_center(shl);
+
   static const char* kSTabsEN[9] = {
-    "7/9 Lang & Screen", "1/9 Node Profile", "2/9 LoRa Radio",  "3/9 Mesh Setup",
-    "4/9 WiFi Network",  "5/9 Bluetooth BLE","6/9 GPS & Clock", "8/9 Regions/CLI",
-    "9/9 SD Import/Exp"
+    "7/9 Lang/Scr", "1/9 Node",     "2/9 Radio",    "3/9 Mesh",
+    "4/9 WiFi",     "5/9 BLE",      "6/9 GPS",      "8/9 Reg/CLI",
+    "9/9 SD Card"
   };
   lv_obj_t* cat_lbl = lv_label_create(sbar);
   lv_obj_set_style_text_font(cat_lbl, &faro_font_14, 0);
@@ -3497,7 +3769,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
   lv_label_set_text(cat_lbl, kSTabsEN[_settings_tab % 9]);
 
   lv_obj_t* next_tab_btn = lv_button_create(sbar);
-  lv_obj_set_size(next_tab_btn, 74, 28);
+  lv_obj_set_size(next_tab_btn, 58, 28);
   Theme::styleTouchButton(next_tab_btn, p.surface_alt, p.accent);
   lv_obj_add_event_cb(next_tab_btn, [](lv_event_t* e) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -3866,14 +4138,70 @@ void App::buildSettingsView(lv_obj_t* parent) {
       lv_obj_center(l);
     };
 
-    // Row 1 (y=20): [Region] [<] [Preset Name] [>]
-    char rg_lbl[24], pr_lbl[40];
+    // Row 1 (y=20): [Region] + [Preset / Frequency Drop-Down List]
+    char rg_lbl[24];
     snprintf(rg_lbl, sizeof(rg_lbl), "%s", reg.code);
-    snprintf(pr_lbl, sizeof(pr_lbl), "%s", active_preset_name);
-    bindRadBtn(lv_button_create(rcard), 12, 0,   20, 90,  32, p.warning, lv_color_hex(0xFFFFFF), rg_lbl);
-    bindRadBtn(lv_button_create(rcard), 0,  94,  20, 34,  32, p.surface_alt, p.text_primary, "<");
-    bindRadBtn(lv_button_create(rcard), 1,  132, 20, 124, 32, p.accent, lv_color_hex(0xFFFFFF), pr_lbl);
-    bindRadBtn(lv_button_create(rcard), 2,  260, 20, 34,  32, p.surface_alt, p.text_primary, ">");
+    bindRadBtn(lv_button_create(rcard), 12, 0, 20, 84, 32, p.warning, lv_color_hex(0xFFFFFF), rg_lbl);
+
+    char dd_opts[512] = {0};
+    size_t dd_pos = 0;
+    for (uint8_t k = 0; k < reg.preset_count; ++k) {
+      int n = snprintf(dd_opts + dd_pos, sizeof(dd_opts) - dd_pos, "%s%s (%.3f)",
+                       k > 0 ? "\n" : "", reg.presets[k].name, double(reg.presets[k].freq_mhz));
+      if (n > 0 && dd_pos + size_t(n) < sizeof(dd_opts)) dd_pos += size_t(n);
+    }
+    if (pi < 0) {
+      snprintf(dd_opts + dd_pos, sizeof(dd_opts) - dd_pos, "%sCustom (%.3f)",
+               dd_pos > 0 ? "\n" : "", double(r.freq_mhz));
+    }
+    (void)active_preset_name;
+
+    lv_obj_t* pr_dd = lv_dropdown_create(rcard);
+    lv_obj_set_size(pr_dd, 206, 32);
+    lv_obj_set_pos(pr_dd, 88, 20);
+    lv_dropdown_set_symbol(pr_dd, nullptr);
+    lv_dropdown_set_options(pr_dd, dd_opts);
+    lv_dropdown_set_selected(pr_dd, pi >= 0 ? uint32_t(pi) : uint32_t(reg.preset_count));
+    lv_obj_set_style_text_font(pr_dd, &faro_font_12, 0);
+    lv_obj_set_style_bg_color(pr_dd, p.accent, 0);
+    lv_obj_set_style_bg_opa(pr_dd, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(pr_dd, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_color(pr_dd, p.border, 0);
+    lv_obj_set_style_border_width(pr_dd, 1, 0);
+    lv_obj_set_style_pad_ver(pr_dd, 6, 0);
+    lv_obj_add_event_cb(pr_dd, [](lv_event_t* e) {
+      auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      auto* dd = static_cast<lv_obj_t*>(lv_event_get_target(e));
+      if (!self || !dd) return;
+      lv_event_code_t code = lv_event_get_code(e);
+      if (code == LV_EVENT_READY) {
+        lv_obj_t* list = lv_dropdown_get_list(dd);
+        if (list) {
+          const auto& pal = Theme::palette(self->_store.uiPrefs().outdoor_high_contrast);
+          lv_obj_set_style_text_font(list, &faro_font_12, 0);
+          lv_obj_set_style_bg_color(list, pal.surface, 0);
+          lv_obj_set_style_text_color(list, pal.text_primary, 0);
+        }
+      } else if (code == LV_EVENT_VALUE_CHANGED) {
+        const RadioRegion& rg = self->_store.regionInfo();
+        uint32_t sel = lv_dropdown_get_selected(dd);
+        if (sel < rg.preset_count) {
+          self->_preset_idx = sel;
+          const auto& pr = rg.presets[sel];
+          RadioConfig cfg = self->_store.radio();
+          cfg.freq_mhz = pr.freq_mhz;
+          cfg.bw_khz = pr.bw_khz;
+          cfg.sf = pr.sf;
+          cfg.cr = pr.cr;
+          cfg.client_repeat = cfg.client_repeat && RegionPolicy::isRepeatFrequency(rg, pr.freq_mhz);
+          if (self->_actions.setRadioConfig(cfg) && pr.path_hash_bytes != 0) {
+            self->_actions.setPathHashMode(pr.path_hash_bytes);
+          }
+          self->updateStatusBar();
+          self->renderBody();
+        }
+      }
+    }, LV_EVENT_ALL, this);
 
     // Row 2 (y=56): [Freq -] [MHz] [Freq +]
     char fq_lbl[32];
@@ -4031,7 +4359,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
     return;
   }
 
-  // SUBPAGE 4 (5/8): Dedicated WiFi Network Station Setup (SSID + Password -> DHCP IP)
+  // SUBPAGE 4 (5/8): Dedicated WiFi Network Station Setup (Scan + SSID Dropdown + Password -> DHCP IP)
   if (_settings_tab == 4) {
     lv_obj_t* wcard = lv_obj_create(parent);
     lv_obj_set_size(wcard, 308, 170);
@@ -4044,23 +4372,100 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_set_style_text_font(wlbl, &faro_font_mono_12, 0);
     lv_obj_set_style_text_color(wlbl, p.text_primary, 0);
     lv_label_set_text_fmt(wlbl,
-                          "WiFi: %s | Status: %s\n"
-                          "SSID: %s | Pwd: %s\n"
-                          "IP (DHCP): %s",
+                          "WiFi:%s | %s (%s)\n"
+                          "SSID: %.18s | Pwd: %s",
                           st.wifi_enabled ? "ON" : "OFF",
-                          st.wifi_connected ? "CONNECTED" : "DISCONNECTED",
+                          st.wifi_connected ? "CONNECTED" : "DISCONN",
+                          st.wifi_connected ? st.wifi_ip : "DHCP",
                           st.wifi_ssid[0] ? st.wifi_ssid : "(not set)",
-                          st.wifi_pwd[0] ? "********" : "(empty)",
-                          st.wifi_connected ? st.wifi_ip : "(auto via DHCP)");
+                          st.wifi_pwd[0] ? "********" : "(empty)");
+
+    // Scanned Wi-Fi Networks Dropdown + [Scan WiFi] button (y = 32)
+    char w_opts[384] = {0};
+    uint32_t w_sel = 0;
+    if (_wifi_scan_count == 0) {
+      snprintf(w_opts, sizeof(w_opts), "%s",
+               st.wifi_ssid[0] ? st.wifi_ssid : "(Tap Scan to list WiFi...)");
+    } else {
+      size_t w_pos = 0;
+      for (size_t k = 0; k < _wifi_scan_count; ++k) {
+        if (st.wifi_ssid[0] && strcmp(_wifi_scan_ssids[k], st.wifi_ssid) == 0) {
+          w_sel = uint32_t(k);
+        }
+        int n = snprintf(w_opts + w_pos, sizeof(w_opts) - w_pos, "%s%.18s (%ddBm)",
+                         k > 0 ? "\n" : "", _wifi_scan_ssids[k], int(_wifi_scan_rssis[k]));
+        if (n > 0 && w_pos + size_t(n) < sizeof(w_opts)) w_pos += size_t(n);
+      }
+    }
+
+    lv_obj_t* w_dd = lv_dropdown_create(wcard);
+    lv_obj_set_size(w_dd, 198, 26);
+    lv_obj_set_pos(w_dd, 0, 32);
+    lv_dropdown_set_symbol(w_dd, nullptr);
+    lv_dropdown_set_options(w_dd, w_opts);
+    lv_dropdown_set_selected(w_dd, w_sel);
+    lv_obj_set_style_text_font(w_dd, &faro_font_12, 0);
+    lv_obj_set_style_bg_color(w_dd, p.surface_alt, 0);
+    lv_obj_set_style_bg_opa(w_dd, LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(w_dd, p.text_primary, 0);
+    lv_obj_set_style_border_color(w_dd, p.border, 0);
+    lv_obj_set_style_border_width(w_dd, 1, 0);
+    lv_obj_set_style_pad_ver(w_dd, 3, 0);
+    lv_obj_add_event_cb(w_dd, [](lv_event_t* e) {
+      auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      auto* dd = static_cast<lv_obj_t*>(lv_event_get_target(e));
+      if (!self || !dd) return;
+      lv_event_code_t code = lv_event_get_code(e);
+      if (code == LV_EVENT_READY) {
+        lv_obj_t* list = lv_dropdown_get_list(dd);
+        if (list) {
+          const auto& pal = Theme::palette(self->_store.uiPrefs().outdoor_high_contrast);
+          lv_obj_set_style_text_font(list, &faro_font_12, 0);
+          lv_obj_set_style_bg_color(list, pal.surface, 0);
+          lv_obj_set_style_text_color(list, pal.text_primary, 0);
+        }
+      } else if (code == LV_EVENT_VALUE_CHANGED) {
+        uint32_t sel = lv_dropdown_get_selected(dd);
+        if (sel < self->_wifi_scan_count) {
+          strncpy(self->_store.status().wifi_ssid, self->_wifi_scan_ssids[sel],
+                  sizeof(self->_store.status().wifi_ssid) - 1);
+          self->_store.status().wifi_ssid[sizeof(self->_store.status().wifi_ssid) - 1] = '\0';
+          // Automatically switch textbox to Password entry after picking an SSID
+          self->_wifi_edit_pwd = true;
+          self->renderBody();
+        }
+      }
+    }, LV_EVENT_ALL, this);
+
+    lv_obj_t* scan_btn = lv_button_create(wcard);
+    lv_obj_set_size(scan_btn, 92, 26);
+    lv_obj_set_pos(scan_btn, 202, 32);
+    Theme::styleTouchButton(scan_btn, p.accent, lv_color_hex(0xFFFFFF));
+    lv_obj_add_event_cb(scan_btn, [](lv_event_t* e) {
+      auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      if (!self) return;
+      self->_wifi_scan_count = self->_actions.scanWifiNetworks(
+          self->_wifi_scan_ssids, self->_wifi_scan_rssis, 8);
+      if (self->_wifi_scan_count > 0 && !self->_store.status().wifi_ssid[0]) {
+        strncpy(self->_store.status().wifi_ssid, self->_wifi_scan_ssids[0],
+                sizeof(self->_store.status().wifi_ssid) - 1);
+        self->_wifi_edit_pwd = true;
+      }
+      self->renderBody();
+    }, LV_EVENT_CLICKED, this);
+    lv_obj_t* scl = lv_label_create(scan_btn);
+    lv_obj_set_style_text_font(scl, &faro_font_12, 0);
+    lv_label_set_text_fmt(scl, _wifi_scan_count > 0 ? "Scan (%zu)" : "Scan WiFi", _wifi_scan_count);
+    lv_obj_center(scl);
 
     _compose_ta = lv_textarea_create(wcard);
     lv_obj_set_size(_compose_ta, 198, 28);
-    lv_obj_set_pos(_compose_ta, 0, 48);
+    lv_obj_set_pos(_compose_ta, 0, 62);
     lv_textarea_set_one_line(_compose_ta, true);
     if (_wifi_edit_pwd) {
       // never put the stored password back on screen
       lv_textarea_set_password_mode(_compose_ta, true);
-      lv_textarea_set_placeholder_text(_compose_ta, "New WiFi password (hidden)...");
+      lv_textarea_set_placeholder_text(_compose_ta, "WiFi password (hidden)...");
     } else {
       lv_textarea_set_text(_compose_ta, st.wifi_ssid);
       lv_textarea_set_placeholder_text(_compose_ta, "Type WiFi SSID (Name)...");
@@ -4069,7 +4474,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
 
     lv_obj_t* sv_btn = lv_button_create(wcard);
     lv_obj_set_size(sv_btn, 92, 28);
-    lv_obj_set_pos(sv_btn, 202, 48);
+    lv_obj_set_pos(sv_btn, 202, 62);
     Theme::styleTouchButton(sv_btn, p.accent, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(sv_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -4090,17 +4495,19 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_label_set_text(svl, _wifi_edit_pwd ? "Save Pwd" : "Save SSID");
     lv_obj_center(svl);
 
-    // 2x2 Grid of Large Touch Buttons (144x34 px)
+    // 2x2 Grid of Touch Buttons (144x28 px)
     lv_obj_t* fld_btn = lv_button_create(wcard);
-    lv_obj_set_size(fld_btn, 144, 34);
-    lv_obj_set_pos(fld_btn, 0, 84);
+    lv_obj_set_size(fld_btn, 144, 28);
+    lv_obj_set_pos(fld_btn, 0, 94);
     Theme::styleTouchButton(fld_btn, p.surface_alt, p.accent);
     lv_obj_add_event_cb(fld_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       if (self->_compose_ta) {
         const char* cur = lv_textarea_get_text(self->_compose_ta);
         if (self->_wifi_edit_pwd) {
-          strncpy(self->_store.status().wifi_pwd, cur ? cur : "", sizeof(self->_store.status().wifi_pwd) - 1);
+          if (cur && cur[0]) {
+            strncpy(self->_store.status().wifi_pwd, cur, sizeof(self->_store.status().wifi_pwd) - 1);
+          }
         } else {
           strncpy(self->_store.status().wifi_ssid, cur ? cur : "", sizeof(self->_store.status().wifi_ssid) - 1);
         }
@@ -4114,15 +4521,16 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_center(fldl);
 
     lv_obj_t* join_btn = lv_button_create(wcard);
-    lv_obj_set_size(join_btn, 144, 34);
-    lv_obj_set_pos(join_btn, 150, 84);
+    lv_obj_set_size(join_btn, 144, 28);
+    lv_obj_set_pos(join_btn, 150, 94);
     Theme::styleTouchButton(join_btn, p.success, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(join_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       if (self->_compose_ta) {
         const char* cur = lv_textarea_get_text(self->_compose_ta);
         if (self->_wifi_edit_pwd) {
-          self->_actions.setWifiConfig(true, self->_store.status().wifi_ssid, cur ? cur : "");
+          const char* pwd = (cur && cur[0]) ? cur : self->_store.status().wifi_pwd;
+          self->_actions.setWifiConfig(true, self->_store.status().wifi_ssid, pwd);
         } else {
           self->_actions.setWifiConfig(true, cur ? cur : "", self->_store.status().wifi_pwd);
         }
@@ -4138,8 +4546,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_center(joinl);
 
     lv_obj_t* pwr_btn = lv_button_create(wcard);
-    lv_obj_set_size(pwr_btn, 144, 34);
-    lv_obj_set_pos(pwr_btn, 0, 122);
+    lv_obj_set_size(pwr_btn, 144, 28);
+    lv_obj_set_pos(pwr_btn, 0, 126);
     Theme::styleTouchButton(pwr_btn, st.wifi_enabled ? p.warning : p.surface_alt,
                             st.wifi_enabled ? lv_color_hex(0xFFFFFF) : p.text_primary);
     lv_obj_add_event_cb(pwr_btn, [](lv_event_t* e) {
@@ -4155,8 +4563,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_center(pwrl);
 
     lv_obj_t* clr_btn = lv_button_create(wcard);
-    lv_obj_set_size(clr_btn, 144, 34);
-    lv_obj_set_pos(clr_btn, 150, 122);
+    lv_obj_set_size(clr_btn, 144, 28);
+    lv_obj_set_pos(clr_btn, 150, 126);
     Theme::styleTouchButton(clr_btn, p.surface_alt, p.danger);
     lv_obj_add_event_cb(clr_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -4192,14 +4600,12 @@ void App::buildSettingsView(lv_obj_t* parent) {
                           st.ble_connected ? "CONNECTED" : "ADVERTISING",
                           unsigned(st.ble_pin), st.node_name);
 
-    char pin_buf[16];
-    snprintf(pin_buf, sizeof(pin_buf), "%06u", unsigned(st.ble_pin));
     _compose_ta = lv_textarea_create(bcard);
     lv_obj_set_size(_compose_ta, 194, 28);
     lv_obj_set_pos(_compose_ta, 0, 48);
     lv_textarea_set_one_line(_compose_ta, true);
-    lv_textarea_set_text(_compose_ta, pin_buf);
-    lv_textarea_set_placeholder_text(_compose_ta, "6-digit BLE PIN...");
+    lv_textarea_set_max_length(_compose_ta, 6);
+    lv_textarea_set_placeholder_text(_compose_ta, "New 6-digit BLE PIN...");
     lv_obj_set_style_text_font(_compose_ta, &faro_font_12, 0);
 
     lv_obj_t* sp_btn = lv_button_create(bcard);
@@ -4211,6 +4617,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
       if (!self || !self->_compose_ta) return;
       uint32_t parsed = uint32_t(atoi(lv_textarea_get_text(self->_compose_ta)));
       if (parsed >= 100000 && parsed <= 999999) {
+        lv_textarea_set_text(self->_compose_ta, "");
         self->_actions.setBlePin(parsed);
         self->renderBody();
       }
@@ -4372,12 +4779,15 @@ void App::buildSettingsView(lv_obj_t* parent) {
 
     lv_obj_t* sdlbl = lv_label_create(sdcard);
     lv_obj_set_pos(sdlbl, 0, 0);
-    lv_obj_set_width(sdcard, 308);
+    lv_obj_set_width(sdlbl, 294);
+    lv_label_set_long_mode(sdlbl, LV_LABEL_LONG_CLIP);
     lv_obj_set_style_text_font(sdlbl, &faro_font_mono_12, 0);
-    lv_obj_set_style_text_color(sdlbl, p.text_primary, 0);
+    bool is_err = strncmp(st.sd_backup_status, "ERR", 3) == 0;
+    bool is_ok  = strncmp(st.sd_backup_status, "OK", 2) == 0;
+    lv_obj_set_style_text_color(sdlbl, is_err ? p.danger : (is_ok ? p.success : p.text_primary), 0);
     lv_label_set_text_fmt(sdlbl,
                           "SD Card: %s (%u/%u MB) | Overwrite: ON\n"
-                          "Files: /faro/settings.bin (no Wi-Fi password)\n"
+                          "Files: /faro/settings.bin + /faro/identity.bak\n"
                           "%s",
                           st.sd_mounted ? "MOUNTED" : "AUTO-MOUNT",
                           unsigned(st.sd_used_mb), unsigned(st.sd_total_mb),
@@ -4393,13 +4803,15 @@ void App::buildSettingsView(lv_obj_t* parent) {
       0xE37400, 0x9334E6,
       0x007B83, 0xD93025
     };
+    const uint32_t now_tick = lv_tick_get();
     struct SdCtx { App* app; int idx; };
     static SdCtx s_sdctx[6];
     for (int i = 0; i < 6; ++i) {
+      bool armed_here = (_armed_action == i && (now_tick - _armed_ms <= 5000U));
       lv_obj_t* b = lv_button_create(sdcard);
       lv_obj_set_size(b, 144, 32);
       lv_obj_set_pos(b, (i % 2) * 150, 50 + (i / 2) * 36);
-      Theme::styleTouchButton(b, lv_color_hex(kSdCols[i]), lv_color_hex(0xFFFFFF));
+      Theme::styleTouchButton(b, armed_here ? p.danger : lv_color_hex(kSdCols[i]), lv_color_hex(0xFFFFFF));
       s_sdctx[i] = {this, i};
       lv_obj_add_event_cb(b, [](lv_event_t* e) {
         auto* ctx = static_cast<SdCtx*>(lv_event_get_user_data(e));
@@ -4413,29 +4825,29 @@ void App::buildSettingsView(lv_obj_t* parent) {
           a->rebuildChrome();
           a->updateStatusBar();
         } else if (ctx->idx == 2 || ctx->idx == 4) {
-          if (!a->confirmTap(ctx->idx, "PRIVATE KEY in plain text on SD! Tap again (5 s) to confirm.")) {
+          if (!a->confirmTap(ctx->idx, "TAP AGAIN (5s): Confirm export private key to SD!")) {
             a->renderBody();
             return;
           }
           bool ok_s = (ctx->idx == 4) ? a->_actions.exportSettingsToSd(true) : true;
           bool ok_k = a->_actions.exportIdentityToSd();
           snprintf(s.sd_backup_status, sizeof(s.sd_backup_status),
-                   (ok_s && ok_k) ? "OK: /faro/identity.bak written. Keep the card safe, delete when done."
-                                  : "ERR: Export to MicroSD failed.");
+                   (ok_s && ok_k) ? "OK: Saved to /faro/ on MicroSD."
+                                  : "ERR: Export to MicroSD failed (check SD card).");
         } else if (ctx->idx == 3) {
-          if (!a->confirmTap(ctx->idx, "Replace this node's identity from SD? Tap again (5 s).")) {
+          if (!a->confirmTap(ctx->idx, "TAP AGAIN (5s): Replace node identity from SD?")) {
             a->renderBody();
             return;
           }
           if (a->_actions.importIdentityHex("SD")) {
             snprintf(s.sd_backup_status, sizeof(s.sd_backup_status),
-                     "OK: Identity imported. Delete the key file from the card.");
+                     "OK: Identity imported from MicroSD.");
           } else {
             snprintf(s.sd_backup_status, sizeof(s.sd_backup_status),
-                     "ERR: /faro/identity.bak or prv_key.txt not found/invalid.");
+                     "ERR: /faro/identity.bak or prv_key.txt not found.");
           }
         } else if (ctx->idx == 5) {
-          if (!a->confirmTap(ctx->idx, "Replace settings AND identity from SD? Tap again (5 s).")) {
+          if (!a->confirmTap(ctx->idx, "TAP AGAIN (5s): Restore settings & identity from SD?")) {
             a->renderBody();
             return;
           }
@@ -4443,8 +4855,11 @@ void App::buildSettingsView(lv_obj_t* parent) {
           bool ok_k = a->_actions.importIdentityHex("SD");
           if (ok_s || ok_k) {
             snprintf(s.sd_backup_status, sizeof(s.sd_backup_status),
-                     "OK: Restored ALL (%s%s) from SD!",
-                     ok_s ? "Settings " : "", ok_k ? "+ Keys" : "");
+                     "OK: Restored (%s%s) from MicroSD!",
+                     ok_s ? "Settings" : "", ok_k ? (ok_s ? "+Keys" : "Keys") : "");
+          } else {
+            snprintf(s.sd_backup_status, sizeof(s.sd_backup_status),
+                     "ERR: No backup files found in /faro/ on SD.");
           }
           a->rebuildChrome();
           a->updateStatusBar();
@@ -4453,7 +4868,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
       }, LV_EVENT_CLICKED, &s_sdctx[i]);
       lv_obj_t* l = lv_label_create(b);
       lv_obj_set_style_text_font(l, &faro_font_12, 0);
-      lv_label_set_text(l, kSdBtns[i]);
+      lv_label_set_text(l, armed_here ? "TAP AGAIN: Confirm!" : kSdBtns[i]);
       lv_obj_center(l);
     }
     return;
@@ -5039,20 +5454,76 @@ void App::buildBootWizardView(lv_obj_t* parent) {
   lv_obj_set_style_text_font(info, &faro_font_12, 0);
   lv_obj_set_style_text_color(info, p.text_primary, 0);
   const RadioRegion& reg = _store.regionInfo();
+  const auto& r = _store.radio();
   lv_label_set_text_fmt(info,
-                        "1. %s: %s (%s)\n"
-                        "2. Node: %s\n"
-                        "3. Region: %s\n"
-                        "    %.3f MHz BW%.1f SF%u, max %d dBm",
+                        "1. %s: %s (%s) | Node: %s\n"
+                        "2. Region: %s (max %d dBm)\n"
+                        "3. Select Frequency / Preset:",
                         tr(StrId::LanguageLabel, lang), languageName(lang), languageCode(lang),
-                        _store.status().node_name, reg.name, double(_store.radio().freq_mhz),
-                        double(_store.radio().bw_khz), unsigned(_store.radio().sf),
+                        _store.status().node_name, reg.name,
                         int(RegionPolicy::maxConductedDbm(reg)));
+
+  // Frequency / Preset Drop-Down List directly in BootWizard
+  char dd_opts[512] = {0};
+  size_t dd_pos = 0;
+  for (uint8_t k = 0; k < reg.preset_count; ++k) {
+    int n = snprintf(dd_opts + dd_pos, sizeof(dd_opts) - dd_pos, "%s%s (%.3f MHz)",
+                     k > 0 ? "\n" : "", reg.presets[k].name, double(reg.presets[k].freq_mhz));
+    if (n > 0 && dd_pos + size_t(n) < sizeof(dd_opts)) dd_pos += size_t(n);
+  }
+  const int pi = RegionPolicy::findPreset(reg, r.freq_mhz, r.bw_khz, r.sf, r.cr);
+
+  lv_obj_t* pr_dd = lv_dropdown_create(card);
+  lv_obj_set_size(pr_dd, 292, 28);
+  lv_obj_set_pos(pr_dd, 0, 52);
+  lv_dropdown_set_symbol(pr_dd, nullptr);
+  lv_dropdown_set_options(pr_dd, dd_opts);
+  lv_dropdown_set_selected(pr_dd, pi >= 0 ? uint32_t(pi) : 0U);
+  lv_obj_set_style_text_font(pr_dd, &faro_font_12, 0);
+  lv_obj_set_style_bg_color(pr_dd, p.surface_alt, 0);
+  lv_obj_set_style_bg_opa(pr_dd, LV_OPA_COVER, 0);
+  lv_obj_set_style_text_color(pr_dd, p.text_primary, 0);
+  lv_obj_set_style_border_color(pr_dd, p.accent, 0);
+  lv_obj_set_style_border_width(pr_dd, 1, 0);
+  lv_obj_set_style_pad_ver(pr_dd, 4, 0);
+  lv_obj_add_event_cb(pr_dd, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    auto* dd = static_cast<lv_obj_t*>(lv_event_get_target(e));
+    if (!self || !dd) return;
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_READY) {
+      lv_obj_t* list = lv_dropdown_get_list(dd);
+      if (list) {
+        const auto& pal = Theme::palette(self->_store.uiPrefs().outdoor_high_contrast);
+        lv_obj_set_style_text_font(list, &faro_font_12, 0);
+        lv_obj_set_style_bg_color(list, pal.surface, 0);
+        lv_obj_set_style_text_color(list, pal.text_primary, 0);
+      }
+    } else if (code == LV_EVENT_VALUE_CHANGED) {
+      const RadioRegion& rg = self->_store.regionInfo();
+      uint32_t sel = lv_dropdown_get_selected(dd);
+      if (sel < rg.preset_count) {
+        self->_preset_idx = sel;
+        const auto& pr = rg.presets[sel];
+        RadioConfig cfg = self->_store.radio();
+        cfg.freq_mhz = pr.freq_mhz;
+        cfg.bw_khz = pr.bw_khz;
+        cfg.sf = pr.sf;
+        cfg.cr = pr.cr;
+        cfg.client_repeat = cfg.client_repeat && RegionPolicy::isRepeatFrequency(rg, pr.freq_mhz);
+        if (self->_actions.setRadioConfig(cfg) && pr.path_hash_bytes != 0) {
+          self->_actions.setPathHashMode(pr.path_hash_bytes);
+        }
+        self->updateStatusBar();
+        self->renderBody();
+      }
+    }
+  }, LV_EVENT_ALL, this);
 
   // Region: applied at once (frequency, power ceiling, duty cycle of the region)
   lv_obj_t* reg_btn = lv_button_create(card);
-  lv_obj_set_size(reg_btn, 140, 38);
-  lv_obj_set_pos(reg_btn, 0, 80);
+  lv_obj_set_size(reg_btn, 140, 34);
+  lv_obj_set_pos(reg_btn, 0, 86);
   Theme::styleTouchButton(reg_btn, p.warning, lv_color_hex(0xFFFFFF));
   lv_obj_add_event_cb(reg_btn, [](lv_event_t* e) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -5066,8 +5537,8 @@ void App::buildBootWizardView(lv_obj_t* parent) {
   lv_obj_center(rl);
 
   lv_obj_t* done_btn = lv_button_create(card);
-  lv_obj_set_size(done_btn, 146, 38);
-  lv_obj_set_pos(done_btn, 146, 80);
+  lv_obj_set_size(done_btn, 146, 34);
+  lv_obj_set_pos(done_btn, 146, 86);
   Theme::styleTouchButton(done_btn, p.success, lv_color_hex(0xFFFFFF));
   lv_obj_add_event_cb(done_btn, [](lv_event_t* e) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));

@@ -807,6 +807,38 @@ bool DeviceMeshActions::setWifiConfig(bool enabled, const char* ssid, const char
 #endif
 }
 
+size_t DeviceMeshActions::scanWifiNetworks(char ssids[][33], int16_t rssis[], size_t max_networks) {
+#if defined(ESP32) && defined(ENABLE_WIFI_INTERFACE)
+  if (!ssids || max_networks == 0) return 0;
+  if (WiFi.getMode() == WIFI_OFF) {
+    WiFi.mode(WIFI_STA);
+  }
+  int n = WiFi.scanNetworks(false, false, false, 120);
+  size_t out = 0;
+  for (int i = 0; i < n && out < max_networks; ++i) {
+    String s = WiFi.SSID(i);
+    if (s.length() == 0) continue;
+    bool dup = false;
+    for (size_t j = 0; j < out; ++j) {
+      if (strcmp(ssids[j], s.c_str()) == 0) {
+        dup = true;
+        break;
+      }
+    }
+    if (dup) continue;
+    strncpy(ssids[out], s.c_str(), 32);
+    ssids[out][32] = '\0';
+    if (rssis) rssis[out] = int16_t(WiFi.RSSI(i));
+    ++out;
+  }
+  WiFi.scanDelete();
+  return out;
+#else
+  (void)ssids; (void)rssis; (void)max_networks;
+  return 0;
+#endif
+}
+
 bool DeviceMeshActions::setBlePin(uint32_t pin) {
   if (!_prefs) return false;
   if (pin != 0 && isWeakBlePin(pin)) return false;  // 0 = random PIN at every boot
@@ -883,7 +915,7 @@ bool DeviceMeshActions::exportIdentityHex(char* out_hex, size_t max_len) {
 
 // Only reachable from the on-device Settings > SD page after a confirmation tap.
 bool DeviceMeshActions::exportIdentityToSd() {
-  if (!_sd || !_sd->isMounted()) return false;
+  if (!_sd) return false;
   uint8_t raw96[96] = {0};
   if (the_mesh.self_id.writeTo(raw96, sizeof(raw96)) != sizeof(raw96)) {
     memset(raw96, 0, sizeof(raw96));
@@ -891,6 +923,9 @@ bool DeviceMeshActions::exportIdentityToSd() {
   }
   bool ok = _sd->writeFile("/faro/identity.bak", raw96, sizeof(raw96));
   memset(raw96, 0, sizeof(raw96));
+  _store.status().sd_mounted = _sd->isMounted();
+  _store.status().sd_total_mb = _sd->totalMB();
+  _store.status().sd_used_mb = _sd->usedMB();
   return ok;
 }
 

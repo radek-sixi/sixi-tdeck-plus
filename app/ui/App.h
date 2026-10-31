@@ -99,6 +99,9 @@ private:
   bool     _map_sd_synced = false;
   double   _map_pan_lat_offset = 0.0;
   double   _map_pan_lon_offset = 0.0;
+  int32_t  _map_drag_last_x = 0;
+  int32_t  _map_drag_last_y = 0;
+  bool     _map_drag_moved = false;
   bool     _show_tracks_overlay = true;
   uint8_t  _contact_filter = 0;       // 0=All, 1=Chat, 2=RPT, 3=Room, 4=Sens, 5=Fav, 6=Tag
   uint8_t  _discover_filter = 0;      // 0=All, 1=RPT, 2=Room, 3=Chat, 4=Sens
@@ -108,6 +111,10 @@ private:
   bool     _settings_hub = true;      // True = show 3x3 touch category grid in Settings
   bool     _mesh_tuning_page = false; // False = Contacts/Telem, True = RF Tuning/ACKs
   bool     _wifi_edit_pwd = false;    // False = edit WiFi SSID, True = edit WiFi Password
+  static constexpr size_t kMaxScannedWifi = 8;
+  char     _wifi_scan_ssids[kMaxScannedWifi][33] = {};
+  int16_t  _wifi_scan_rssis[kMaxScannedWifi] = {};
+  size_t   _wifi_scan_count = 0;
   bool     _screen_locked = false;    // Pocket Lock Screen with live RX preview & Quick Reply
   bool     _home_subpage = false;     // Dedicated Quick Actions subpage (Lock, Theme, My QR, Lang)
   bool     _chats_subpage = false;    // Dedicated Chats Tools subpage (Search, +URI, Contacts)

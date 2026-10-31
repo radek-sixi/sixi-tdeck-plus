@@ -1,13 +1,13 @@
 {
-  "name": "Faro 0.10.2 — LilyGo T-Beam S3 Supreme (headless)",
-  "version": "0.10.2",
+  "name": "Faro 0.10.3 — LilyGo T-Beam S3 Supreme (headless)",
+  "version": "0.10.3",
   "new_install_prompt_erase": false,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.10.2/faro-tbeam-supreme-0.10.2-merged.bin",
+          "path": "https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.10.3/faro-tbeam-supreme-0.10.3-merged.bin",
           "offset": 0
         }
       ]

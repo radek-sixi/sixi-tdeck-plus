@@ -43,6 +43,10 @@ public:
   virtual bool setRadioConfig(const RadioConfig& cfg) = 0;
   virtual bool setNodeName(const char* name) = 0;
   virtual bool setWifiConfig(bool enabled, const char* ssid, const char* password) = 0;
+  virtual size_t scanWifiNetworks(char ssids[][33], int16_t rssis[], size_t max_networks) {
+    (void)ssids; (void)rssis; (void)max_networks;
+    return 0;
+  }
   virtual bool setBlePin(uint32_t pin) = 0;
   virtual bool setRepeatEnabled(bool enabled) = 0;
   virtual bool setDefaultScope(const char* scope_name) = 0;
