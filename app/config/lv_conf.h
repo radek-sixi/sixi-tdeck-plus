@@ -15,7 +15,10 @@
 /*=========================
    STDLIB WRAPPER SETTINGS
  *=========================*/
-#define LV_USE_STDLIB_MALLOC    LV_STDLIB_CLIB
+#define LV_USE_STDLIB_MALLOC    LV_STDLIB_BUILTIN
+#define LV_MEM_SIZE             (256U * 1024U)
+#define LV_MEM_POOL_INCLUDE     <stdlib.h>
+#define LV_MEM_POOL_ALLOC       malloc
 #define LV_USE_STDLIB_STRING    LV_STDLIB_CLIB
 #define LV_USE_STDLIB_SPRINTF   LV_STDLIB_CLIB
 

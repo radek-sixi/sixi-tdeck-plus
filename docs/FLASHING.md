@@ -1,11 +1,11 @@
 # Flashing Faro
 
-Release files (GitHub release `v0.10.3`):
+Release files (GitHub release `v0.10.4`):
 
 | File | Flash at | Use |
 |---|---|---|
-| `faro-<board>-0.10.3-merged.bin` | `0x0` | First install or recovery: bootloader, partition table, `boot_app0`, app |
-| `faro-<board>-0.10.3-app.bin` | `0x10000` | Update of an existing Faro or MeshCore companion install; keeps identity, contacts, channels |
+| `faro-<board>-0.10.4-merged.bin` | `0x0` | First install or recovery: bootloader, partition table, `boot_app0`, app |
+| `faro-<board>-0.10.4-app.bin` | `0x10000` | Update of an existing Faro or MeshCore companion install; keeps identity, contacts, channels |
 | `SHA256SUMS` | — | Check first: `sha256sum -c SHA256SUMS` |
 
 `<board>` is `tdeck` (T-Deck and T-Deck Plus), `tdeck-max`, `thinknode-m9`, `tbeam-supreme` or `heltec-v3`.
@@ -13,8 +13,10 @@ Release files (GitHub release `v0.10.3`):
 0.10.1 was the first release with the radio regions and the data Faro keeps on flash (both below). It also
 fixed a T-Deck Plus bootloop in the battery ADC that affected 0.10.0; if you still run 0.10.0, update.
 0.10.2 lowered idle power draw (screen off after 5 min idle, lower default brightness, Wi-Fi modem powered
-down when disabled). 0.10.3 adds Wi-Fi network scanning, I2S audio notifications, touch map drag/pan,
+down when disabled). 0.10.3 added Wi-Fi network scanning, I2S audio notifications, touch map drag/pan,
 emoji support, preset dropdowns, high-contrast textbox focus/cursor, and MicroSD backup fixes.
+0.10.4 fixes ESP32-S3 Wi-Fi scan driver parameters, BLE MITM pairing & bond recovery, screen idle
+dimming/sleep, graphical emoji glyphs, Settings tab navigation, and moves the LVGL heap pool to PSRAM.
 
 ## Web flasher (browser, no command line)
 
@@ -28,7 +30,7 @@ You can flash from Chrome or Edge without installing anything, using an
   host without it, so for URL-based flashing use the CORS-enabled copy on GitHub Pages:
 
   ```
-  https://radek-sixi.github.io/sixi-tdeck-plus/firmware/v0.10.3/faro-tdeck-0.10.3-merged.bin
+  https://radek-sixi.github.io/sixi-tdeck-plus/firmware/v0.10.4/faro-tdeck-0.10.4-merged.bin
   ```
 
   (same pattern for the other boards and the `-app.bin`; the Mesh America configurator catalog also lists Faro).
@@ -51,9 +53,9 @@ Switch the device off, connect USB-C, hold the trackball pressed, switch on, rel
 
 ```bash
 # first install
-esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x0 faro-tdeck-0.10.3-merged.bin
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x0 faro-tdeck-0.10.4-merged.bin
 # update, keeps data
-esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x10000 faro-tdeck-0.10.3-app.bin
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x10000 faro-tdeck-0.10.4-app.bin
 ```
 
 On Windows the port is `COMx`, on macOS `/dev/cu.usbmodem*`. If 921600 baud fails, use 460800.

@@ -286,13 +286,17 @@ int main() {
   emo_msg.is_channel = true;
   emo_msg.channel_index = 0;
   strncpy(emo_msg.sender_name, "AlpinePeer", sizeof(emo_msg.sender_name) - 1);
-  strncpy(emo_msg.text, "Hello \xF0\x9F\x99\x82 \xF0\x9F\x91\x8D \xE2\x9D\xA4\xEF\xB8\x8F!", sizeof(emo_msg.text) - 1);
+  strncpy(emo_msg.text, "Hello \xF0\x9F\x99\x82 \xF0\x9F\x91\x8D \xE2\x9D\xA4\xEF\xB8\x8F \xF0\x9F\x94\xA5 \xE2\x9C\x85 \xF0\x9F\x86\x98!", sizeof(emo_msg.text) - 1);
   emo_msg.valid = true;
   store.appendMessage(emo_msg);
   app.openChannelThread(0);
   lv_tick_inc(25);
   lv_timer_handler();
   lv_refr_now(disp);
+
+  // Test BLE PIN reset generates a valid 6-digit PIN (never 000000)
+  assert(actions.setBlePin(0));
+  assert(store.status().ble_pin >= 100000 && store.status().ble_pin <= 999999);
 
   printf("[PASS] test_ui_sim (all screens x 4 languages)\n");
   return 0;

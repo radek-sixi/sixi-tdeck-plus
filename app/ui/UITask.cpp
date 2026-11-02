@@ -442,29 +442,28 @@ public:
 #if !defined(FARO_HEADLESS)
     app.tick(t0);
 
-    // Hardware fast-wake check when dimmed or off (Trackball click GPIO 0 or GT911 Touch INT GPIO 16)
+    // Hardware fast-wake check when dimmed or off (Trackball click GPIO 0).
+    // Note: Do NOT check digitalRead(16) == LOW here because GT911 TP_INT sits LOW when idle
+    // and would immediately wake the display on the very next loop tick; indev_touch already
+    // polls GT911 over I2C and calls wakeDisplay() whenever a touch point is active.
     if (dimmed || screen_off) {
       if (digitalRead(0) == LOW) {
         wakeDisplay();
       }
-#if defined(LILYGO_TDECK)
-      if (digitalRead(16) == LOW) {
-        wakeDisplay();
-      }
-#endif
     }
 
     // Idle screen dim after screen_timeout_secs
     uint32_t timeout_ms = uint32_t(store.uiPrefs().screen_timeout_secs) * 1000U;
     if (!dimmed && !screen_off && timeout_ms > 0 && (t0 - last_input_ms > timeout_ms)) {
-      if (display) display->setBacklight(25);
+      if (display) display->setBacklight(10);
+      keyboard.setBacklight(0);
       dimmed = true;
     }
 
-    // After dimming, turn the screen fully off (backlight 0 + panel sleep) after a longer idle.
+    // After dimming, turn the screen fully off (backlight 0 + panel sleep) 15s later.
     // Gated on dim being enabled: "Dim: OFF" keeps the screen on indefinitely.
-    static constexpr uint32_t kScreenOffMs = 300000U;  // 5 min of no input
-    if (dimmed && !screen_off && (t0 - last_input_ms > kScreenOffMs)) {
+    uint32_t screen_off_ms = timeout_ms + 15000U;
+    if (dimmed && !screen_off && timeout_ms > 0 && (t0 - last_input_ms > screen_off_ms)) {
       if (display) display->turnOff();
       keyboard.setBacklight(0);
       screen_off = true;

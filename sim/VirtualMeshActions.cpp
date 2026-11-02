@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // sim/VirtualMeshActions.cpp — 6-node virtual Alpine mesh harness implementation
 #include "VirtualMeshActions.h"
+#include "core/Random.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -461,8 +462,8 @@ size_t VirtualMeshActions::scanWifiNetworks(char ssids[][33], int16_t rssis[], s
 }
 
 bool VirtualMeshActions::setBlePin(uint32_t pin) {
-  if (pin != 0 && (pin < 100000 || pin > 999999)) return false;
-  _store.status().ble_pin = pin;
+  if (pin != 0 && (pin < 100000 || pin > 999999 || isWeakBlePin(pin))) return false;
+  _store.status().ble_pin = (pin == 0) ? randomBlePin() : pin;
   _store.bumpVersion();
   return true;
 }

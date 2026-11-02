@@ -4,6 +4,12 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <SHA256.h>
+#if defined(ESP32)
+#include <esp_wifi.h>
+#include <BLEDevice.h>
+#include <esp_gap_ble_api.h>
+#include <esp_gatt_defs.h>
+#endif
 
 extern unsigned int encode_base64(const unsigned char input[], unsigned int input_length, unsigned char output[]);
 
@@ -15,6 +21,10 @@ extern DataStore store;
 #ifdef ENABLE_WIFI_INTERFACE
 #include <helpers/wifi/SerialWifiInterface.h>
 extern SerialWifiInterface wifi_interface;
+extern bool wifi_enabled;
+extern bool wifi_needs_reconnect;
+extern char wifi_ssid[33];
+extern char wifi_pwd[64];
 #endif
 
 namespace faro::platform {
@@ -41,6 +51,52 @@ void DeviceMeshActions::begin(mesh::MainBoard* board, MultiSerialInterface* ifac
   _sensors = sensors;
   _prefs = prefs;
   _sd = sd;
+
+#if defined(ESP32)
+  // Ensure BLE pairing PIN is persisted in NodePrefs on first boot so the PIN remains stable across
+  // reboots and CMD_DEVICE_QUERY (RESP_CODE_DEVICE_INFO) reports the active 6-digit PIN.
+  if (_prefs && _prefs->ble_pin == 0) {
+    uint32_t boot_pin = the_mesh.getBLEPin();
+    if (boot_pin < 100000 || boot_pin > 999999) {
+      boot_pin = core::randomBlePin();
+    }
+    _prefs->ble_pin = boot_pin;
+    the_mesh.setBLEPin(boot_pin);
+    the_mesh.savePrefs();
+  }
+  if (BLEDevice::getInitialized()) {
+    uint32_t active_pin = the_mesh.getBLEPin();
+    uint8_t auth_req = ESP_LE_AUTH_REQ_SC_MITM_BOND;
+    uint8_t iocap = ESP_IO_CAP_OUT;
+    uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+    uint8_t rsp_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+    uint8_t key_size = 16;
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY, &active_pin, sizeof(uint32_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth_req, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &key_size, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(uint8_t));
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY, &rsp_key, sizeof(uint8_t));
+    // Trigger SMP encryption/pairing immediately on GATT connect so phone writes to the
+    // MITM-protected RX characteristic never stall or time out on an unencrypted link.
+    BLEDevice::setEncryptionLevel(ESP_BLE_SEC_ENCRYPT_MITM);
+    BLEDevice::setCustomGapHandler([](esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param) {
+      if (event == ESP_GAP_BLE_AUTH_CMPL_EVT && param) {
+        if (!param->ble_security.auth_cmpl.success) {
+          Serial.printf("[FARO-BLE] auth failed (reason=0x%02x) — removing stale bond\n",
+                        unsigned(param->ble_security.auth_cmpl.fail_reason));
+          esp_ble_remove_bond_device(param->ble_security.auth_cmpl.bd_addr);
+        } else {
+          Serial.println("[FARO-BLE] auth & bond succeeded");
+        }
+      } else if (event == ESP_GAP_BLE_PASSKEY_REQ_EVT && param) {
+        esp_ble_passkey_reply(param->ble_security.ble_req.bd_addr, true, the_mesh.getBLEPin());
+      } else if (event == ESP_GAP_BLE_NC_REQ_EVT && param) {
+        esp_ble_confirm_reply(param->ble_security.key_notif.bd_addr, true);
+      }
+    });
+  }
+#endif
 
 
   syncStore();
@@ -781,18 +837,38 @@ bool DeviceMeshActions::setWifiConfig(bool enabled, const char* ssid, const char
   _prefs->wifi_enabled = enabled ? 1 : 0;
   if (ssid) {
     strncpy(_prefs->wifi_ssid, ssid, sizeof(_prefs->wifi_ssid) - 1);
+    _prefs->wifi_ssid[sizeof(_prefs->wifi_ssid) - 1] = '\0';
     strncpy(_store.status().wifi_ssid, ssid, sizeof(_store.status().wifi_ssid) - 1);
+    _store.status().wifi_ssid[sizeof(_store.status().wifi_ssid) - 1] = '\0';
+    strncpy(::wifi_ssid, ssid, sizeof(::wifi_ssid) - 1);
+    ::wifi_ssid[sizeof(::wifi_ssid) - 1] = '\0';
   }
   if (password) {
     strncpy(_prefs->wifi_pwd, password, sizeof(_prefs->wifi_pwd) - 1);
+    _prefs->wifi_pwd[sizeof(_prefs->wifi_pwd) - 1] = '\0';
     strncpy(_store.status().wifi_pwd, password, sizeof(_store.status().wifi_pwd) - 1);
+    _store.status().wifi_pwd[sizeof(_store.status().wifi_pwd) - 1] = '\0';
+    strncpy(::wifi_pwd, password, sizeof(::wifi_pwd) - 1);
+    ::wifi_pwd[sizeof(::wifi_pwd) - 1] = '\0';
   }
   the_mesh.savePrefs();
   _store.status().wifi_enabled = enabled;
+  ::wifi_enabled = enabled && _prefs->wifi_ssid[0] != '\0';
+  ::wifi_needs_reconnect = false;
 #if defined(ESP32)
   if (enabled && _prefs->wifi_ssid[0]) {
+    board.setInhibitSleep(true);
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(true);  // required for ESP32-S3 single-antenna Wi-Fi + BLE coexistence
+    WiFi.setAutoReconnect(true);
     WiFi.disconnect();
     WiFi.begin(_prefs->wifi_ssid, _prefs->wifi_pwd);
+    static bool s_wifi_iface_started = false;
+    if (!s_wifi_iface_started && _ifaces) {
+      s_wifi_iface_started = true;
+      wifi_interface.begin(5000);
+      _ifaces->addInterface(InterfaceType::WiFi, &wifi_interface);
+    }
   } else if (!enabled) {
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);  // power the modem down: disconnect() alone leaves the radio on
@@ -812,26 +888,65 @@ size_t DeviceMeshActions::scanWifiNetworks(char ssids[][33], int16_t rssis[], si
   if (!ssids || max_networks == 0) return 0;
   if (WiFi.getMode() == WIFI_OFF) {
     WiFi.mode(WIFI_STA);
+    delay(60);
   }
-  int n = WiFi.scanNetworks(false, false, false, 120);
+  WiFi.setSleep(true);  // share RF time with BLE while scanning
+  // Bypass Arduino-ESP32 WiFi.scanNetworks() which leaves wifi_scan_config_t::home_chan_dwell_time
+  // uninitialized on the stack and causes esp_wifi_scan_start() to fail with ESP_ERR_INVALID_ARG (0x102).
+  esp_wifi_scan_stop();
+  wifi_scan_config_t scan_cfg = {};
+  scan_cfg.show_hidden = false;
+  scan_cfg.scan_type = WIFI_SCAN_TYPE_ACTIVE;
+  scan_cfg.scan_time.active.min = 50;
+  scan_cfg.scan_time.active.max = 120;
+  esp_err_t err = esp_wifi_scan_start(&scan_cfg, true);
+  uint16_t ap_num = 0;
+  if (err == ESP_OK) {
+    esp_wifi_scan_get_ap_num(&ap_num);
+  }
   size_t out = 0;
-  for (int i = 0; i < n && out < max_networks; ++i) {
-    String s = WiFi.SSID(i);
-    if (s.length() == 0) continue;
-    bool dup = false;
-    for (size_t j = 0; j < out; ++j) {
-      if (strcmp(ssids[j], s.c_str()) == 0) {
-        dup = true;
-        break;
+  if (err == ESP_OK && ap_num > 0) {
+    uint16_t fetch_num = ap_num > 24 ? 24 : ap_num;
+    wifi_ap_record_t* recs = static_cast<wifi_ap_record_t*>(calloc(fetch_num, sizeof(wifi_ap_record_t)));
+    if (recs) {
+      if (esp_wifi_scan_get_ap_records(&fetch_num, recs) == ESP_OK) {
+        // Sort strongest RSSI first
+        for (uint16_t i = 0; i < fetch_num; ++i) {
+          for (uint16_t j = i + 1; j < fetch_num; ++j) {
+            if (recs[j].rssi > recs[i].rssi) {
+              wifi_ap_record_t tmp = recs[i];
+              recs[i] = recs[j];
+              recs[j] = tmp;
+            }
+          }
+        }
+        for (uint16_t i = 0; i < fetch_num && out < max_networks; ++i) {
+          const char* s = reinterpret_cast<const char*>(recs[i].ssid);
+          if (!s[0]) continue;
+          bool dup = false;
+          for (size_t j = 0; j < out; ++j) {
+            if (strncmp(ssids[j], s, 32) == 0) {
+              dup = true;
+              break;
+            }
+          }
+          if (dup) continue;
+          strncpy(ssids[out], s, 32);
+          ssids[out][32] = '\0';
+          if (rssis) rssis[out] = int16_t(recs[i].rssi);
+          ++out;
+        }
       }
+      free(recs);
     }
-    if (dup) continue;
-    strncpy(ssids[out], s.c_str(), 32);
-    ssids[out][32] = '\0';
-    if (rssis) rssis[out] = int16_t(WiFi.RSSI(i));
-    ++out;
+  } else {
+    esp_wifi_clear_ap_list();
   }
-  WiFi.scanDelete();
+  Serial.printf("[FARO-WIFI] scan: err=%d ap_num=%u out=%zu (heap=%u)\n",
+                int(err), unsigned(ap_num), out, unsigned(ESP.getFreeHeap()));
+  if (!_prefs || !_prefs->wifi_enabled) {
+    WiFi.mode(WIFI_OFF);
+  }
   return out;
 #else
   (void)ssids; (void)rssis; (void)max_networks;
@@ -841,11 +956,35 @@ size_t DeviceMeshActions::scanWifiNetworks(char ssids[][33], int16_t rssis[], si
 
 bool DeviceMeshActions::setBlePin(uint32_t pin) {
   if (!_prefs) return false;
-  if (pin != 0 && isWeakBlePin(pin)) return false;  // 0 = random PIN at every boot
-  _prefs->ble_pin = pin;
-  if (pin != 0) the_mesh.setBLEPin(pin);
+  if (pin != 0 && isWeakBlePin(pin)) return false;
+  uint32_t active_pin = pin;
+  if (pin == 0) {
+    // Reset BLE bonds and generate a fresh random 6-digit PIN immediately shown on screen
+    active_pin = core::randomBlePin();
+#if defined(ESP32)
+    int dev_num = esp_ble_get_bond_device_num();
+    if (dev_num > 0) {
+      esp_ble_bond_dev_t* list = static_cast<esp_ble_bond_dev_t*>(calloc(size_t(dev_num), sizeof(esp_ble_bond_dev_t)));
+      if (list) {
+        if (esp_ble_get_bond_device_list(&dev_num, list) == ESP_OK) {
+          for (int i = 0; i < dev_num; ++i) {
+            esp_ble_remove_bond_device(list[i].bd_addr);
+          }
+        }
+        free(list);
+      }
+    }
+#endif
+  }
+  _prefs->ble_pin = active_pin;
+  the_mesh.setBLEPin(active_pin);
   the_mesh.savePrefs();
-  _store.status().ble_pin = pin;
+  _store.status().ble_pin = active_pin;
+#if defined(ESP32)
+  if (BLEDevice::getInitialized()) {
+    esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY, &active_pin, sizeof(uint32_t));
+  }
+#endif
   _store.bumpVersion();
   return true;
 }

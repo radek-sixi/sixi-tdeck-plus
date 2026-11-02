@@ -133,29 +133,38 @@ void FaroDisplay::reinitSpi() {
 namespace {
 // LilyGo T-Deck Plus uses an AW9364 1-wire 16-step pulse-dimming LED driver on GPIO 42.
 // Never feed continuous PWM (analogWrite) into AW9364, as LOW > 0.5ms triggers shutdown/latch-off.
+static int s_aw9364_step = 0;
+
 void applyTDeckAw9364Backlight(uint8_t percent) {
   pinMode(PIN_TFT_LEDA_CTL, OUTPUT);
   if (percent == 0) {
     digitalWrite(PIN_TFT_LEDA_CTL, LOW);
     delay(3);  // > 2.5ms shutdown reset
-    return;
-  }
-  // Reset AW9364 internal counter via 3ms LOW, then pull HIGH -> wakes at Step 16/16 (100% brightness)
-  digitalWrite(PIN_TFT_LEDA_CTL, LOW);
-  delay(3);
-  digitalWrite(PIN_TFT_LEDA_CTL, HIGH);
-  delayMicroseconds(35);
-
-  if (percent >= 80) {
-    // Full brightness (Step 16/16): keep PIN_TFT_LEDA_CTL steady HIGH (0 pulses)
+    s_aw9364_step = 0;
     return;
   }
 
-  // Map 1..79% to AW9364 steps 2..15 (each 2us LOW->HIGH pulse decrements by 1/16)
-  int step = (int(percent) * 16 + 99) / 100;
-  if (step < 2) step = 2;
-  if (step > 15) step = 15;
-  int pulses = 16 - step;
+  int target_step = (percent >= 80) ? 16 : ((int(percent) * 16 + 99) / 100);
+  if (target_step < 1) target_step = 1;
+  if (target_step > 16) target_step = 16;
+
+  if (target_step == s_aw9364_step) {
+    return;
+  }
+
+  int pulses = 0;
+  if (s_aw9364_step > target_step) {
+    // Dimming down from a known active step: pulse down directly without a 100% brightness flash
+    pulses = s_aw9364_step - target_step;
+  } else {
+    // Waking from off (0) or stepping up: reset AW9364 via 3ms LOW, then pull HIGH -> wakes at Step 16/16
+    digitalWrite(PIN_TFT_LEDA_CTL, LOW);
+    delay(3);
+    digitalWrite(PIN_TFT_LEDA_CTL, HIGH);
+    delayMicroseconds(35);
+    pulses = 16 - target_step;
+  }
+
   for (int i = 0; i < pulses; ++i) {
     noInterrupts();
     digitalWrite(PIN_TFT_LEDA_CTL, LOW);
@@ -164,6 +173,7 @@ void applyTDeckAw9364Backlight(uint8_t percent) {
     interrupts();
     delayMicroseconds(5);
   }
+  s_aw9364_step = target_step;
 }
 }  // namespace
 #endif

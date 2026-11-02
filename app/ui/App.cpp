@@ -77,6 +77,8 @@ lv_obj_t* createAvatarCircle(lv_obj_t* parent, const char* name, uint8_t key_byt
 
 // Translates common UTF-8 emoji sequences into readable ASCII emoticons/badges so messages from
 // mobile apps render cleanly with the embedded 1-bit/4-bit bitmap fonts.
+// Normalize incoming and outgoing text so supported emojis render as graphical glyphs via
+// faro_font_emoji_12/14/16 fallback fonts, and common ASCII emoticons upgrade to graphical emojis.
 void formatEmojiText(const char* in, char* out, size_t max_len) {
   if (!out || max_len == 0) return;
   if (!in) {
@@ -84,47 +86,61 @@ void formatEmojiText(const char* in, char* out, size_t max_len) {
     return;
   }
   struct EmojiMap {
-    const char* utf8;
+    const char* pattern;
     const char* repl;
   };
+  // Map synonymous UTF-8 emojis and common ASCII emoticons to glyphs present in faro_font_emoji
   static const EmojiMap kMap[] = {
-    {"\xF0\x9F\x98\x80", ":)"},     // 😀
-    {"\xF0\x9F\x98\x83", ":D"},     // 😃
-    {"\xF0\x9F\x98\x84", ":D"},     // 😄
-    {"\xF0\x9F\x98\x81", ":D"},     // 😁
-    {"\xF0\x9F\x98\x82", ":'D"},    // 😂
-    {"\xF0\x9F\xA4\xA3", "ROFL"},   // 🤣
-    {"\xF0\x9F\x98\x89", ";)"},     // 😉
-    {"\xF0\x9F\x98\x8A", ":)"},     // 😊
-    {"\xF0\x9F\x99\x82", ":)"},     // 🙂
-    {"\xF0\x9F\x98\x8E", "B)"},     // 😎
-    {"\xF0\x9F\x98\x94", ":("},     // 😔
-    {"\xF0\x9F\x98\xA2", ":'("},    // 😢
-    {"\xF0\x9F\x98\xAD", "T_T"},    // 😭
-    {"\xF0\x9F\x98\xA1", ">:("},    // 😡
-    {"\xF0\x9F\xA4\x94", "(?)"},    // 🤔
-    {"\xF0\x9F\x91\x8D", "[+1]"},   // 👍
-    {"\xF0\x9F\x91\x8E", "[-1]"},   // 👎
-    {"\xF0\x9F\x91\x8C", "[OK]"},   // 👌
-    {"\xF0\x9F\x91\x8B", "[Hi]"},   // 👋
-    {"\xF0\x9F\x99\x8F", "[Thx]"},  // 🙏
-    {"\xE2\x9D\xA4\xEF\xB8\x8F", "<3"}, // ❤️
-    {"\xE2\x9D\xA4", "<3"},         // ❤
-    {"\xF0\x9F\x92\x99", "<3"},     // 💙
-    {"\xF0\x9F\x92\x9A", "<3"},     // 💚
-    {"\xF0\x9F\x94\xA5", "[*]"},    // 🔥
-    {"\xE2\x9A\xA0\xEF\xB8\x8F", "[!]"}, // ⚠️
-    {"\xE2\x9A\xA0", "[!]"},        // ⚠
-    {"\xE2\x9C\x85", "[OK]"},       // ✅
-    {"\xE2\x9C\x94\xEF\xB8\x8F", "[OK]"}, // ✔️
-    {"\xE2\x9C\x94", "[OK]"},       // ✔
-    {"\xE2\x9D\x8C", "[X]"},        // ❌
-    {"\xF0\x9F\x86\x98", "[SOS]"},  // 🆘
-    {"\xF0\x9F\x93\x8D", "[PIN]"},  // 📍
-    {"\xF0\x9F\x93\xA1", "[RF]"},   // 📡
-    {"\xF0\x9F\x94\x8B", "[BAT]"},  // 🔋
-    {"\xE2\x9B\xB0\xEF\xB8\x8F", "[MTN]"}, // ⛰️
-    {"\xE2\x9B\xB0", "[MTN]"},      // ⛰
+    // Multi-byte UTF-8 variants with U+FE0F variation selector or sister codepoints
+    {"\xE2\x9D\xA4\xEF\xB8\x8F", "\xE2\x9D\xA4"},         // ❤️ -> ❤ (U+2764)
+    {"\xF0\x9F\x92\x99", "\xE2\x9D\xA4"},                 // 💙 -> ❤
+    {"\xF0\x9F\x92\x9A", "\xE2\x9D\xA4"},                 // 💚 -> ❤
+    {"\xE2\x9A\xA0\xEF\xB8\x8F", "\xE2\x9A\xA0"},         // ⚠️ -> ⚠ (U+26A0)
+    {"\xE2\x9C\x94\xEF\xB8\x8F", "\xE2\x9C\x85"},         // ✔️ -> ✅ (U+2705)
+    {"\xE2\x9C\x94", "\xE2\x9C\x85"},                     // ✔ -> ✅ (U+2705)
+    {"\xE2\x9B\xB0\xEF\xB8\x8F", "\xE2\x9B\xB0"},         // ⛰️ -> ⛰ (U+26F0)
+    {"\xF0\x9F\x98\x83", "\xF0\x9F\x98\x80"},             // 😃 -> 😀 (U+1F600)
+    {"\xF0\x9F\x98\x84", "\xF0\x9F\x98\x80"},             // 😄 -> 😀
+    {"\xF0\x9F\x98\x81", "\xF0\x9F\x98\x80"},             // 😁 -> 😀
+    {"\xF0\x9F\x98\x8A", "\xF0\x9F\x98\x80"},             // 😊 -> 😀
+    {"\xF0\x9F\x99\x82", "\xF0\x9F\x98\x80"},             // 🙂 -> 😀
+    {"\xF0\x9F\xA4\xA3", "\xF0\x9F\x98\x82"},             // 🤣 -> 😂 (U+1F602)
+    {"\xF0\x9F\x98\x94", "\xF0\x9F\x98\xA2"},             // 😔 -> 😢 (U+1F622)
+    {"\xF0\x9F\x98\xAD", "\xF0\x9F\x98\xA2"},             // 😭 -> 😢
+    {"\xF0\x9F\x91\x8C", "\xF0\x9F\x91\x8D"},             // 👌 -> 👍 (U+1F44D)
+    {"\xF0\x9F\x99\x8F", "\xF0\x9F\x91\x8D"},             // 🙏 -> 👍
+    // Common ASCII emoticons -> graphical UTF-8 emoji glyphs
+    {":-)", "\xF0\x9F\x98\x80"},                          // :-) -> 😀
+    {":)", "\xF0\x9F\x98\x80"},                           // :)  -> 😀
+    {":-D", "\xF0\x9F\x98\x82"},                          // :-D -> 😂
+    {":D", "\xF0\x9F\x98\x82"},                           // :D  -> 😂
+    {";-)", "\xF0\x9F\x98\x89"},                          // ;-) -> 😉
+    {";)", "\xF0\x9F\x98\x89"},                           // ;)  -> 😉
+    {"B-)", "\xF0\x9F\x98\x8E"},                          // B-) -> 😎
+    {":-(", "\xF0\x9F\x98\xA2"},                          // :-( -> 😢
+    {":(", "\xF0\x9F\x98\xA2"},                           // :(  -> 😢
+    {"<3", "\xE2\x9D\xA4"},                               // <3  -> ❤
+  };
+
+  // Supported 4-byte UTF-8 emojis rendered directly by faro_font_emoji_12/14/16
+  static const char* const kSupported4Byte[] = {
+    "\xF0\x9F\x86\x98",  // 🆘 U+1F198
+    "\xF0\x9F\x8E\x89",  // 🎉 U+1F389
+    "\xF0\x9F\x91\x8B",  // 👋 U+1F44B
+    "\xF0\x9F\x91\x8D",  // 👍 U+1F44D
+    "\xF0\x9F\x91\x8E",  // 👎 U+1F44E
+    "\xF0\x9F\x93\x8D",  // 📍 U+1F4CD
+    "\xF0\x9F\x93\xA1",  // 📡 U+1F4E1
+    "\xF0\x9F\x94\x8B",  // 🔋 U+1F50B
+    "\xF0\x9F\x94\xA5",  // 🔥 U+1F525
+    "\xF0\x9F\x98\x80",  // 😀 U+1F600
+    "\xF0\x9F\x98\x82",  // 😂 U+1F602
+    "\xF0\x9F\x98\x89",  // 😉 U+1F609
+    "\xF0\x9F\x98\x8E",  // 😎 U+1F60E
+    "\xF0\x9F\x98\xA1",  // 😡 U+1F621
+    "\xF0\x9F\x98\xA2",  // 😢 U+1F622
+    "\xF0\x9F\x9A\x80",  // 🚀 U+1F680
+    "\xF0\x9F\xA4\x94",  // 🤔 U+1F914
   };
 
   size_t o = 0;
@@ -132,8 +148,8 @@ void formatEmojiText(const char* in, char* out, size_t max_len) {
   while (*p && o + 1 < max_len) {
     bool matched = false;
     for (const auto& m : kMap) {
-      size_t ulen = strlen(m.utf8);
-      if (strncmp(p, m.utf8, ulen) == 0) {
+      size_t ulen = strlen(m.pattern);
+      if (strncmp(p, m.pattern, ulen) == 0) {
         size_t rlen = strlen(m.repl);
         if (o + rlen < max_len) {
           memcpy(out + o, m.repl, rlen);
@@ -152,13 +168,26 @@ void formatEmojiText(const char* in, char* out, size_t max_len) {
       p += 3;
       continue;
     }
-    // Fallback for any other 4-byte supplementary plane emoji (F0 9F xx xx)
+    // Pass supported 4-byte supplementary plane emojis directly to LVGL emoji fallback font
     if (static_cast<uint8_t>(p[0]) == 0xF0 &&
         (static_cast<uint8_t>(p[1]) & 0xF0) == 0x90 &&
         p[1] && p[2] && p[3]) {
-      if (o + 3 < max_len) {
-        memcpy(out + o, "[*]", 3);
-        o += 3;
+      bool is_supported = false;
+      for (const char* sup : kSupported4Byte) {
+        if (memcmp(p, sup, 4) == 0) {
+          is_supported = true;
+          break;
+        }
+      }
+      if (is_supported) {
+        if (o + 4 < max_len) {
+          memcpy(out + o, p, 4);
+          o += 4;
+        }
+      } else if (o + 4 < max_len) {
+        // Unknown supplementary emoji -> render generic 😀 graphical icon instead of ASCII [*]
+        memcpy(out + o, "\xF0\x9F\x98\x80", 4);
+        o += 4;
       }
       p += 4;
       continue;
@@ -1833,8 +1862,22 @@ void App::buildChatThreadView(lv_obj_t* parent) {
     lv_obj_set_flex_align(ebar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_remove_flag(ebar, LV_OBJ_FLAG_SCROLLABLE);
 
-    static const char* kEmoticons[6] = {" :) ", " :D ", " <3 ", " [+1] ", " [OK] ", " [SOS] "};
-    static const char* kEmoLabels[6] = {":)", ":D", "<3", "+1", "OK", "SOS"};
+    static const char* kEmoticons[6] = {
+      " \xF0\x9F\x98\x80 ",  // 😀
+      " \xF0\x9F\x98\x82 ",  // 😂
+      " \xE2\x9D\xA4 ",      // ❤
+      " \xF0\x9F\x91\x8D ",  // 👍
+      " \xE2\x9C\x85 ",      // ✅
+      " \xF0\x9F\x86\x98 "   // 🆘
+    };
+    static const char* kEmoLabels[6] = {
+      "\xF0\x9F\x98\x80",
+      "\xF0\x9F\x98\x82",
+      "\xE2\x9D\xA4",
+      "\xF0\x9F\x91\x8D",
+      "\xE2\x9C\x85",
+      "\xF0\x9F\x86\x98"
+    };
     struct EmoCtx { App* app; const char* s; };
     static EmoCtx s_ectx[6];
     for (int e_i = 0; e_i < 6; ++e_i) {
@@ -1991,7 +2034,7 @@ void App::buildChatThreadView(lv_obj_t* parent) {
   }, LV_EVENT_CLICKED, this);
   lv_obj_t* cl = lv_label_create(can_btn);
   lv_obj_set_style_text_font(cl, &faro_font_12, 0);
-  lv_label_set_text(cl, ":) / Can");
+  lv_label_set_text(cl, "\xF0\x9F\x98\x80 / Can");
   lv_obj_center(cl);
 
   lv_obj_t* send_btn = lv_button_create(comp);
@@ -2341,6 +2384,81 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
   lv_label_set_text(ol, "Options");
   lv_obj_center(ol);
 
+  if (_show_compose_helper) {
+    lv_obj_t* hbox = lv_obj_create(parent);
+    lv_obj_set_size(hbox, 308, 124);
+    Theme::styleCard(hbox, outdoor);
+    lv_obj_set_style_pad_all(hbox, 3, 0);
+    lv_obj_set_flex_flow(hbox, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(hbox, 3, 0);
+
+    lv_obj_t* ebar = lv_obj_create(hbox);
+    lv_obj_set_size(ebar, 294, 24);
+    lv_obj_set_style_bg_opa(ebar, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ebar, 0, 0);
+    lv_obj_set_style_pad_all(ebar, 0, 0);
+    lv_obj_set_flex_flow(ebar, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(ebar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_remove_flag(ebar, LV_OBJ_FLAG_SCROLLABLE);
+
+    static const char* kChEmoticons[6] = {
+      " \xF0\x9F\x98\x80 ",  // 😀
+      " \xF0\x9F\x98\x82 ",  // 😂
+      " \xE2\x9D\xA4 ",      // ❤
+      " \xF0\x9F\x91\x8D ",  // 👍
+      " \xE2\x9C\x85 ",      // ✅
+      " \xF0\x9F\x86\x98 "   // 🆘
+    };
+    static const char* kChEmoLabels[6] = {
+      "\xF0\x9F\x98\x80",
+      "\xF0\x9F\x98\x82",
+      "\xE2\x9D\xA4",
+      "\xF0\x9F\x91\x8D",
+      "\xE2\x9C\x85",
+      "\xF0\x9F\x86\x98"
+    };
+    struct ChEmoCtx { App* app; const char* s; };
+    static ChEmoCtx s_ch_ectx[6];
+    for (int e_i = 0; e_i < 6; ++e_i) {
+      lv_obj_t* eb = lv_button_create(ebar);
+      lv_obj_set_size(eb, 46, 22);
+      Theme::styleTouchButton(eb, p.surface_alt, p.accent);
+      s_ch_ectx[e_i] = {this, kChEmoticons[e_i]};
+      lv_obj_add_event_cb(eb, [](lv_event_t* e) {
+        auto* ctx = static_cast<ChEmoCtx*>(lv_event_get_user_data(e));
+        App* a = ctx->app;
+        if (a->_compose_ta) {
+          lv_textarea_add_text(a->_compose_ta, ctx->s);
+        }
+        a->_show_compose_helper = false;
+        a->renderBody();
+      }, LV_EVENT_CLICKED, &s_ch_ectx[e_i]);
+      lv_obj_t* elbl = lv_label_create(eb);
+      lv_obj_set_style_text_font(elbl, &faro_font_12, 0);
+      lv_label_set_text(elbl, kChEmoLabels[e_i]);
+      lv_obj_center(elbl);
+    }
+
+    struct ChCanCtx { App* app; size_t idx; };
+    static ChCanCtx s_ch_can_ctx[AppStore::kMaxCanned];
+    for (size_t ci = 0; ci < _store.cannedCount(); ++ci) {
+      lv_obj_t* cb = lv_button_create(hbox);
+      lv_obj_set_size(cb, 294, 22);
+      Theme::styleTouchButton(cb, p.surface_alt, p.text_primary);
+      s_ch_can_ctx[ci] = {this, ci};
+      lv_obj_add_event_cb(cb, [](lv_event_t* e) {
+        auto* ctx = static_cast<ChCanCtx*>(lv_event_get_user_data(e));
+        App* a = ctx->app;
+        a->_actions.sendChannelMessage(a->_selected_channel_idx, a->_store.cannedAt(ctx->idx));
+        a->_show_compose_helper = false;
+        a->renderBody();
+      }, LV_EVENT_CLICKED, &s_ch_can_ctx[ci]);
+      lv_obj_t* clbl = lv_label_create(cb);
+      lv_obj_set_style_text_font(clbl, &faro_font_12, 0);
+      lv_label_set_text(clbl, _store.cannedAt(ci));
+      lv_obj_center(clbl);
+    }
+  } else {
   lv_obj_t* msg_box = lv_obj_create(parent);
   lv_obj_set_size(msg_box, 308, 124);
   Theme::styleCard(msg_box, outdoor);
@@ -2400,6 +2518,7 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
                           ch_name, double(_store.radio().freq_mhz));
   }
   lv_obj_scroll_to_y(msg_box, LV_COORD_MAX, LV_ANIM_OFF);
+  }
 
   lv_obj_t* comp = lv_obj_create(parent);
   lv_obj_set_size(comp, 308, 34);
@@ -2411,13 +2530,27 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
   lv_obj_remove_flag(comp, LV_OBJ_FLAG_SCROLLABLE);
 
   _compose_ta = lv_textarea_create(comp);
-  lv_obj_set_size(_compose_ta, 224, 32);
+  lv_obj_set_size(_compose_ta, 166, 32);
   lv_textarea_set_one_line(_compose_ta, true);
   lv_textarea_set_placeholder_text(_compose_ta, "Broadcast to channel...");
   lv_obj_set_style_text_font(_compose_ta, &faro_font_12, 0);
 
+  lv_obj_t* can_btn = lv_button_create(comp);
+  lv_obj_set_size(can_btn, 62, 32);
+  Theme::styleTouchButton(can_btn, _show_compose_helper ? p.accent : p.surface_alt,
+                          _show_compose_helper ? lv_color_hex(0xFFFFFF) : p.text_primary);
+  lv_obj_add_event_cb(can_btn, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    self->_show_compose_helper = !self->_show_compose_helper;
+    self->renderBody();
+  }, LV_EVENT_CLICKED, this);
+  lv_obj_t* cl = lv_label_create(can_btn);
+  lv_obj_set_style_text_font(cl, &faro_font_12, 0);
+  lv_label_set_text(cl, "\xF0\x9F\x98\x80 / Can");
+  lv_obj_center(cl);
+
   lv_obj_t* send_btn = lv_button_create(comp);
-  lv_obj_set_size(send_btn, 76, 32);
+  lv_obj_set_size(send_btn, 72, 32);
   Theme::styleTouchButton(send_btn, p.accent, lv_color_hex(0xFFFFFF));
   lv_obj_add_event_cb(send_btn, [](lv_event_t* e) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -3773,7 +3906,15 @@ void App::buildSettingsView(lv_obj_t* parent) {
   Theme::styleTouchButton(next_tab_btn, p.surface_alt, p.accent);
   lv_obj_add_event_cb(next_tab_btn, [](lv_event_t* e) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
-    self->_settings_tab = (self->_settings_tab + 1) % 9;
+    static const uint8_t kHubTabOrder[9] = {1, 2, 3, 4, 5, 6, 0, 7, 8};
+    uint8_t next_tab = 1;
+    for (int i = 0; i < 9; ++i) {
+      if (kHubTabOrder[i] == (self->_settings_tab % 9)) {
+        next_tab = kHubTabOrder[(i + 1) % 9];
+        break;
+      }
+    }
+    self->_settings_tab = next_tab;
     self->renderBody();
   }, LV_EVENT_CLICKED, this);
   lv_obj_t* ntl = lv_label_create(next_tab_btn);
@@ -4441,9 +4582,18 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_set_size(scan_btn, 92, 26);
     lv_obj_set_pos(scan_btn, 202, 32);
     Theme::styleTouchButton(scan_btn, p.accent, lv_color_hex(0xFFFFFF));
+    lv_obj_t* scl = lv_label_create(scan_btn);
+    lv_obj_set_style_text_font(scl, &faro_font_12, 0);
+    lv_label_set_text_fmt(scl, _wifi_scan_count > 0 ? "Scan (%zu)" : "Scan WiFi", _wifi_scan_count);
+    lv_obj_center(scl);
     lv_obj_add_event_cb(scan_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       if (!self) return;
+      auto* btn = static_cast<lv_obj_t*>(lv_event_get_target(e));
+      if (btn && lv_obj_get_child_count(btn) > 0) {
+        lv_label_set_text(lv_obj_get_child(btn, 0), "Scanning...");
+        lv_refr_now(nullptr);
+      }
       self->_wifi_scan_count = self->_actions.scanWifiNetworks(
           self->_wifi_scan_ssids, self->_wifi_scan_rssis, 8);
       if (self->_wifi_scan_count > 0 && !self->_store.status().wifi_ssid[0]) {
@@ -4453,10 +4603,6 @@ void App::buildSettingsView(lv_obj_t* parent) {
       }
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
-    lv_obj_t* scl = lv_label_create(scan_btn);
-    lv_obj_set_style_text_font(scl, &faro_font_12, 0);
-    lv_label_set_text_fmt(scl, _wifi_scan_count > 0 ? "Scan (%zu)" : "Scan WiFi", _wifi_scan_count);
-    lv_obj_center(scl);
 
     _compose_ta = lv_textarea_create(wcard);
     lv_obj_set_size(_compose_ta, 198, 28);
@@ -4648,12 +4794,12 @@ void App::buildSettingsView(lv_obj_t* parent) {
     Theme::styleTouchButton(p2_btn, p.surface_alt, p.accent);
     lv_obj_add_event_cb(p2_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
-      self->_actions.setBlePin(0);  // 0 = new random PIN on every boot, shown on screen
+      self->_actions.setBlePin(0);  // 0 = reset BLE bonds & generate fresh random PIN shown on screen
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* p2l = lv_label_create(p2_btn);
     lv_obj_set_style_text_font(p2l, &faro_font_12, 0);
-    lv_label_set_text(p2l, "Random each boot");
+    lv_label_set_text(p2l, "Reset BLE / PIN");
     lv_obj_center(p2l);
 
     lv_obj_t* qm_btn = lv_button_create(bcard);

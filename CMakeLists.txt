@@ -86,6 +86,7 @@ if(EXISTS "${LVGL_ROOT}/src/lv_init.c")
     app/ui/fonts/faro_font_14.c
     app/ui/fonts/faro_font_16.c
     app/ui/fonts/faro_font_mono_12.c
+    app/ui/fonts/faro_font_emoji.c
     sim/VirtualMeshActions.cpp
   )
   target_include_directories(faro_ui PUBLIC
