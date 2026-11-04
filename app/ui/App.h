@@ -128,7 +128,7 @@ private:
   bool     _channel_thread_subpage = false; // Dedicated ChannelThread Options subpage (@Ment, Scope)
   bool     _discover_subpage = false; // Dedicated Discover Advert & Scan subpage
   bool     _contacts_subpage = false; // Dedicated Contacts Tools subpage (Export JSON, Search, +URI)
-  uint8_t  _diag_tab = 0;             // 0=Stats, 1=Sniff, 2=Graph, 3=RFCalc, 4=Bot/SOS
+  uint8_t  _diag_tab = 0;             // 0=Stats, 1=Sniff, 2=Graph, 3=RFCalc, 4=Bot/Exports
   bool     _show_compose_helper = false;
   bool     _show_my_qr_modal = false;
   bool     _show_calc_modal = false;
@@ -138,7 +138,6 @@ private:
   uint32_t _last_rendered_version = 0;
   uint32_t _last_status_ms = 0;
   uint32_t _last_bot_msg_id = 0;
-  uint32_t _last_deadman_tick_ms = 0;
 
   lv_group_t* _input_group = nullptr;
   lv_obj_t* _root = nullptr;

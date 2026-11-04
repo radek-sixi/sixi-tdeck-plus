@@ -1,13 +1,13 @@
 {
-  "name": "Faro 0.10.5 — Heltec WiFi LoRa 32 V3 (headless)",
-  "version": "0.10.5",
+  "name": "Faro 0.10.6 — Heltec WiFi LoRa 32 V3 (headless)",
+  "version": "0.10.6",
   "new_install_prompt_erase": false,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.10.5/faro-heltec-v3-0.10.5-merged.bin",
+          "path": "https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.10.6/faro-heltec-v3-0.10.6-merged.bin",
           "offset": 0
         }
       ]

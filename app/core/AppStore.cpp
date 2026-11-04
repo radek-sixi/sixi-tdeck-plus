@@ -1355,7 +1355,7 @@ struct AppStoreCodec {
     for (int i = 0; i < 3; ++i) in.str(up.custom_tags[i], sizeof(up.custom_tags[i]));
     in.str(up.away_msg, sizeof(up.away_msg));
     if (!in.ok) return false;
-    // The dead-man countdown restarts at boot; a restart never fires an SOS by itself
+    // The dead-man countdown restarts at boot; a restart never triggers it by itself
     static constexpr uint32_t kDeadmanSecs[4] = {1800, 900, 1800, 3600};
     up.deadman_remaining_secs = kDeadmanSecs[up.deadman_mode];
     up.deadman_triggered = false;

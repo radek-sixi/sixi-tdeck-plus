@@ -666,7 +666,7 @@ void testPersistence() {
   assert(b.loadUiState(ui_path));
   assert(b.uiPrefs().language == Language::DE && !b.uiPrefs().outdoor_high_contrast);
   assert(b.uiPrefs().screen_timeout_secs == 300 && b.uiPrefs().deadman_mode == 2);
-  assert(!b.uiPrefs().deadman_triggered);  // a restart never fires the dead-man SOS
+  assert(!b.uiPrefs().deadman_triggered);  // a restart never fires the dead-man timer
   assert(b.region() == RadioRegionId::US915);
   const ContactRecord* bc = b.findContactByPubKey(c.pub_key);
   assert(bc && bc->favourite && bc->tag_mask == 0x05 && strcmp(bc->notes, "meet at the hut") == 0);

@@ -141,7 +141,7 @@ int main() {
   assert(actions.useLastAdvertPath(store.contacts()[0].pub_key));
   assert(store.contacts()[0].out_path_len == 2);
 
-  // Test SX1262 LoRa Link Budget & Time-on-Air Calculator, Range Test CSV, PingBot & Dead-Man's Switch
+  // Test SX1262 LoRa Link Budget & Time-on-Air Calculator, Range Test CSV and PingBot
   float toa_64 = faro::core::geomath::loraTimeOnAirMs(64, 8, 62.5f, 8);
   assert(toa_64 > 150.0f && toa_64 < 650.0f);
   float lb_db = faro::core::geomath::loraLinkBudgetDb(22, 8, 62.5f);
@@ -175,33 +175,6 @@ int main() {
   assert(strstr(store.messageAt(store.messageCount() - 1).text, "[Faro Bot]") != nullptr);
   assert(strstr(store.messageAt(store.messageCount() - 1).text, "Pos:46.021,7.749") != nullptr);  // coarse
 
-  // Dead-Man's Switch: the SOS (with position) goes only to a private channel, never on Public
-  for (size_t ci = 0; ci < faro::core::AppStore::kMaxChannels; ++ci) {
-    auto& ch = store.channelsMutable()[ci];
-    if (ch.index != 0 && !ch.is_hashtag) ch.valid = false;
-  }
-  const size_t msgs_before = store.messageCount();
-  store.uiPrefs().deadman_mode = 1;
-  store.uiPrefs().deadman_remaining_secs = 2;
-  store.uiPrefs().deadman_triggered = false;
-  app.tick(20000);
-  app.tick(23000);
-  assert(store.uiPrefs().deadman_triggered);
-  assert(store.messageCount() == msgs_before);  // no private channel: nothing sent
-  assert(strstr(store.status().last_cli_reply, "Dead-man") != nullptr);
-
-  faro::core::ChannelRecord team{};
-  team.index = 5;
-  strncpy(team.name, "Team", sizeof(team.name) - 1);
-  team.valid = true;
-  assert(store.upsertChannel(team) != nullptr);
-  store.uiPrefs().deadman_remaining_secs = 2;
-  store.uiPrefs().deadman_triggered = false;
-  app.tick(30000);
-  app.tick(33000);
-  assert(store.uiPrefs().deadman_triggered);
-  assert(strstr(store.messageAt(store.messageCount() - 1).text, "[SOS DEADMAN]") != nullptr);
-  assert(store.messageAt(store.messageCount() - 1).channel_index == 5);
 
   // Store & Forward on Advert + JSON Contact Export
   app.showScreen(faro::ui::ScreenId::Home);

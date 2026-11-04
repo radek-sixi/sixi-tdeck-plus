@@ -393,14 +393,6 @@ void drawCanvasCircle(uint16_t* buf, int w, int h, int cx, int cy, int r, uint16
   }
 }
 
-// Alarm texts with a position go only to a private (non-Public, non-hashtag) channel, never in clear on Public.
-const ChannelRecord* firstPrivateChannel(const AppStore& store) {
-  for (size_t ci = 0; ci < AppStore::kMaxChannels; ++ci) {
-    const auto& ch = store.channels()[ci];
-    if (ch.valid && ch.index != 0 && !ch.is_hashtag) return &ch;
-  }
-  return nullptr;
-}
 }  // namespace
 
 void App::tick(uint32_t now_ms) {
@@ -419,11 +411,9 @@ void App::tick(uint32_t now_ms) {
     if (!m.valid || m.id <= _last_bot_msg_id) continue;
     _last_bot_msg_id = m.id;
     if (m.outgoing || up.bot_mode == 0) continue;
-    if (strncmp(m.text, "[Faro Bot]", 10) == 0 ||
-        strncmp(m.text, "[AWAY]", 6) == 0 ||
-        strncmp(m.text, "[SOS", 4) == 0) {
-      continue;
-    }
+    bool is_own_message = strncmp(m.text, "[Faro Bot]", 10) == 0 ||
+                          strncmp(m.text, "[AWAY]", 6) == 0;
+    if (is_own_message) continue;
 
     // Bots answer direct messages from known contacts only, at most once per 30 s.
     if (m.is_channel) continue;
@@ -476,45 +466,6 @@ void App::tick(uint32_t now_ms) {
     }
   }
 
-  // 2. Lone-Worker / Dead-Man's Switch Countdown Timer
-  if (up.deadman_mode != 0 && !up.deadman_triggered) {
-    if (_last_deadman_tick_ms == 0) {
-      _last_deadman_tick_ms = now_ms;
-    } else if (now_ms > _last_deadman_tick_ms && (now_ms - _last_deadman_tick_ms) >= 1000) {
-      uint32_t elapsed_s = (now_ms - _last_deadman_tick_ms) / 1000;
-      _last_deadman_tick_ms += elapsed_s * 1000;
-      if (up.deadman_remaining_secs > elapsed_s) {
-        up.deadman_remaining_secs -= elapsed_s;
-      } else {
-        up.deadman_remaining_secs = 0;
-        up.deadman_triggered = true;
-        const auto& g = _store.gps();
-        char pos[64] = {0};
-        if (g.valid && up.coord_format == 1) {
-          int32_t lv_e = 0, lv_n = 0;
-          geomath::wgs84ToSwissLV95(g.lat_deg, g.lon_deg, lv_e, lv_n);
-          snprintf(pos, sizeof(pos), "WGS:%.4f,%.4f LV95:%d,%d",
-                   g.lat_deg, g.lon_deg, int(lv_e), int(lv_n));
-        } else if (g.valid) {
-          snprintf(pos, sizeof(pos), "WGS:%.5f,%.5f", g.lat_deg, g.lon_deg);
-        } else {
-          snprintf(pos, sizeof(pos), "no GPS fix");  // never send a made-up position
-        }
-        char sos_msg[156] = {0};
-        snprintf(sos_msg, sizeof(sos_msg),
-                 "[SOS DEADMAN] %s missed check-in! %s Batt:%u%%",
-                 _store.status().node_name, pos, unsigned(_store.status().batt_pct));
-        const ChannelRecord* target = firstPrivateChannel(_store);
-        if (!target || !_actions.sendChannelMessage(target->index, sos_msg)) {
-          strncpy(_store.status().last_cli_reply, "Dead-man: no private channel configured - not sent.",
-                  sizeof(_store.status().last_cli_reply) - 1);
-        }
-        _store.bumpVersion();
-      }
-    }
-  } else {
-    _last_deadman_tick_ms = now_ms;
-  }
 
   if (_store.version() != _last_rendered_version) {
     updateStatusBar();
@@ -874,11 +825,12 @@ void App::updateStatusBar() {
   // Region, then the strongest repeater heard lately (shown only: MeshCore routes as always)
   char left_buf[96] = {0};
   const char* home_prefix = (_current_screen != ScreenId::Home) ? "[Home] " : "";
+  const char* dm_tag = "";
   snprintf(left_buf, sizeof(left_buf), "%s%.8s%s%s|%.9s|%s%.6s",
            home_prefix,
            st.node_name,
            up.bot_mode == 1 ? "[PING]" : (up.bot_mode == 2 ? "[AWAY]" : ""),
-           up.deadman_mode ? "[DM]" : "",
+           dm_tag,
            _store.regionInfo().code,
            rr.hasPreferred() ? "R:" : "",
            rr.hasPreferred() ? rr.preferredName() : "");
@@ -1401,7 +1353,7 @@ void App::buildHomeView(lv_obj_t* parent) {
 
   // Clean 2x2 Touch Grid (4 large 150x48 px tiles) for effortless finger navigation:
   // Row 1: [1. Contacts]      [2. Discover]
-  // Row 2: [3. Alerts/Graph]  [4. SOS/Diagnostics]
+  // Row 2: [3. Mesh graph]  [4. Diagnostics]
   struct NavCtx { App* app; int idx; };
   static NavCtx s_qctx[4];
   static const uint32_t kTileCols[4] = {0x1A73E8, 0x1E8E3E, 0x9334E6, 0xE37400};
