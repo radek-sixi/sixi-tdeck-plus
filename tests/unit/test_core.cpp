@@ -347,6 +347,24 @@ void testGeoMathAndTiles() {
   (void)reader.hasTile(12, tx, ty);
   assert(reader.cacheMisses() == 1 && reader.cacheHits() == 1);
 
+  // hasTile() must use the lightweight existence probe, not decode a tile (map builds call it)
+  class ExistenceOnlyFs : public ITileFileSystem {
+  public:
+    int decode_calls = 0;
+    int32_t readTileFile(const char*, uint8_t*, size_t) override { return -1; }
+    int tileExists(int z, int x, int y) override {
+      (void)z; (void)x; (void)y;
+      return 1;
+    }
+    bool readTileRgb565(int, int, int, uint16_t*) override {
+      ++decode_calls;
+      return false;
+    }
+  } existence_fs;
+  OfflineTileReader existence_reader(&existence_fs);
+  assert(existence_reader.hasTile(12, 100, 100));
+  assert(existence_fs.decode_calls == 0);
+
   uint16_t viewport[64 * 48] = {0};
   reader.renderViewportRgb565(46.0207, 7.7491, 12, viewport, 64, 48, false);
   assert(viewport[0] != 0);

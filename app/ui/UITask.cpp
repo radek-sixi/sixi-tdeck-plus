@@ -45,6 +45,38 @@ constexpr const char* kUiStatePath = "/spiffs/faro_ui.bin";
 constexpr const char* kMessagesPath = "/spiffs/faro_msgs.bin";
 #endif
 
+#if !defined(FARO_HEADLESS)
+// LVGL allocates a 256x256 ARGB8888 buffer (262,144 B) for one decoded PNG tile. The built-in
+// LVGL pool (LV_MEM_SIZE) is only 256 KB, so the allocation always failed and every map render
+// re-decompressed the same PNG before failing again. Keep the tile buffer in PSRAM outside the
+// pool; the small lv_draw_buf_t header still comes from LVGL's allocator.
+static void* faroLvImageBufMalloc(size_t size_bytes, lv_color_format_t) {
+  const size_t total = size_bytes + LV_DRAW_BUF_ALIGN - 1;
+  void* p = nullptr;
+#if defined(ESP32)
+  if (psramFound()) p = ps_malloc(total);
+#endif
+  if (!p) p = malloc(total);
+  return p;
+}
+
+static void faroLvImageBufFree(void* buf) {
+  free(buf);
+}
+
+static void* faroLvImageBufAlign(void* buf, lv_color_format_t) {
+  if (!buf) return nullptr;
+  const uintptr_t mask = uintptr_t(LV_DRAW_BUF_ALIGN - 1);
+  return reinterpret_cast<void*>((reinterpret_cast<uintptr_t>(buf) + mask) & ~mask);
+}
+
+static uint32_t faroLvImageBufStride(uint32_t width, lv_color_format_t cf) {
+  const uint32_t width_bytes = (width * lv_color_format_get_bpp(cf) + 7U) >> 3;
+  const uint32_t align = LV_DRAW_BUF_STRIDE_ALIGN;
+  return (width_bytes + align - 1U) & ~(align - 1U);
+}
+#endif
+
 
 #if !defined(FARO_HEADLESS)
 class SdTileFs : public core::ITileFileSystem {
@@ -61,6 +93,12 @@ public:
 
   int32_t readTileFile(const char* path, uint8_t* buf, size_t max_len) override {
     return _sd.readFile(path, buf, max_len);
+  }
+
+  int tileExists(int z, int x, int y) override {
+    // One byte is enough: SdCard knows the discovered root/extension and its own negative cache.
+    uint8_t probe = 0;
+    return _sd.readTileFile(z, x, y, &probe, 1) > 0 ? 1 : 0;
   }
 
   bool readTileRgb565(int z, int x, int y, uint16_t* out_256x256) override {
@@ -223,6 +261,11 @@ public:
     trackball.begin();
 
     lv_init();
+    // PNG tiles decode to ARGB8888 through the image-cache draw buffer handlers. Point those at
+    // PSRAM so a 256x256 tile does not have to fit in the small LVGL object pool.
+    lv_draw_buf_handlers_init(lv_draw_buf_get_image_handlers(),
+                              faroLvImageBufMalloc, faroLvImageBufFree, faroLvImageBufAlign,
+                              nullptr, nullptr, faroLvImageBufStride);
     lv_display_t* d = lv_display_create(320, 240);
     lv_display_set_color_format(d, LV_COLOR_FORMAT_RGB565);
     lv_display_set_buffers(d, buf1, nullptr, sizeof(buf1), LV_DISPLAY_RENDER_MODE_PARTIAL);
@@ -349,10 +392,27 @@ public:
 #endif
     last_input_ms = millis();
     if (sd.isMounted() && sd.hasDiscoveredTiles()) {
-      bool tile_ok = tiles.hasTile(sd.defaultTileZ(), sd.defaultTileX(), sd.defaultTileY());
-      Serial.printf("[FARO-SD] Tile decode self-test (%d/%d/%d): ok=%d (heap=%u, psram=%u)\n",
-                    sd.defaultTileZ(), sd.defaultTileX(), sd.defaultTileY(), int(tile_ok),
-                    unsigned(ESP.getFreeHeap()), unsigned(ESP.getFreePsram()));
+      const uint32_t t_decode = millis();
+      const uint16_t* decoded = tiles.getDecodedTile(sd.defaultTileZ(), sd.defaultTileX(),
+                                                     sd.defaultTileY());
+      Serial.printf("[FARO-SD] Tile decode self-test (%d/%d/%d): ok=%d in %u ms (heap=%u, psram=%u)\n",
+                    sd.defaultTileZ(), sd.defaultTileX(), sd.defaultTileY(), int(decoded != nullptr),
+                    unsigned(millis() - t_decode), unsigned(ESP.getFreeHeap()),
+                    unsigned(ESP.getFreePsram()));
+      uint16_t* bench = static_cast<uint16_t*>(ps_malloc(308U * 138U * sizeof(uint16_t)));
+      double c_lat = 0.0, c_lon = 0.0;
+      int c_z = -1;
+      if (bench && tiles.getDefaultTileCenter(c_lat, c_lon, c_z)) {
+        const uint32_t t_render = millis();
+        tiles.renderViewportRgb565(c_lat, c_lon, c_z, bench, 308, 138, false);
+        const uint32_t render_ms = millis() - t_render;
+        const uint32_t t_render_cached = millis();
+        tiles.renderViewportRgb565(c_lat, c_lon, c_z, bench, 308, 138, false);
+        Serial.printf("[FARO-SD] Map render 308x138: first=%u ms, cached=%u ms (sd_tiles=%d)\n",
+                      unsigned(render_ms), unsigned(millis() - t_render_cached),
+                      int(tiles.lastRenderUsedSdTiles()));
+      }
+      if (bench) free(bench);
     }
 #else
     (void)disp;

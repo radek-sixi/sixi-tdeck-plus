@@ -406,6 +406,12 @@ const ChannelRecord* firstPrivateChannel(const AppStore& store) {
 void App::tick(uint32_t now_ms) {
   auto& up = _store.uiPrefs();
 
+  // Battery, clock, WiFi/GPS state change without bumping the store version every second.
+  if (now_ms - _last_status_ms >= 1000U) {
+    _last_status_ms = now_ms;
+    updateStatusBar();
+  }
+
   // 1. PingBot / AwayBot Auto-Responder
   size_t mcnt = _store.messageCount();
   for (size_t i = 0; i < mcnt; ++i) {
@@ -514,6 +520,10 @@ void App::tick(uint32_t now_ms) {
     updateStatusBar();
     renderBody();
     _last_rendered_version = _store.version();
+  } else if (_current_screen == ScreenId::Map && _map_render_dirty &&
+             now_ms - _map_last_render_ms >= 40U) {
+    // Finish a pan that was coalesced while the touch event stream was running.
+    renderMapCanvas();
   }
 }
 
@@ -934,6 +944,8 @@ void App::renderBody() {
   }
   lv_obj_clean(_body);
   _compose_ta = nullptr;
+  _map_canvas_obj = nullptr;
+  _map_render_dirty = false;
 
   switch (_current_screen) {
     case ScreenId::Home:          buildHomeView(_body); break;
@@ -3525,6 +3537,49 @@ void App::buildTracePathView(lv_obj_t* parent) {
   }
 }
 
+void App::computeMapBase(double& out_lat, double& out_lon) {
+  const auto& g = _store.gps();
+  const auto& st = _store.status();
+
+  // Without a GPS fix: the manual position, else the region's centre (or the SD tiles when the
+  // card does not cover that centre at this zoom).
+  out_lat = _store.regionInfo().map_lat;
+  out_lon = _store.regionInfo().map_lon;
+  double sd_lat = 0.0, sd_lon = 0.0;
+  int sd_zoom = -1;
+  const bool has_sd_default = _tiles.getDefaultTileCenter(sd_lat, sd_lon, sd_zoom);
+  if (!_map_sd_synced && has_sd_default && sd_zoom >= 1 && sd_zoom <= 18) {
+    _map_zoom = sd_zoom;
+    _map_sd_synced = true;
+  }
+
+  if (g.valid) {
+    out_lat = g.lat_deg;
+    out_lon = g.lon_deg;
+  } else if (st.manual_lat_deg != 0.0 || st.manual_lon_deg != 0.0) {
+    out_lat = st.manual_lat_deg;
+    out_lon = st.manual_lon_deg;
+  } else if (has_sd_default) {
+    int ch_tx = 0, ch_ty = 0, ch_px = 0, ch_py = 0;
+    geomath::latLonToTilePixel(out_lat, out_lon, _map_zoom, ch_tx, ch_ty, ch_px, ch_py);
+    if (!_tiles.hasTile(_map_zoom, ch_tx, ch_ty)) {
+      out_lat = sd_lat;
+      out_lon = sd_lon;
+    }
+  }
+}
+
+void App::renderMapCanvas() {
+  double base_lat = 0.0, base_lon = 0.0;
+  computeMapBase(base_lat, base_lon);
+  const bool outdoor = _store.uiPrefs().outdoor_high_contrast;
+  _tiles.renderViewportRgb565(base_lat + _map_pan_lat_offset, base_lon + _map_pan_lon_offset,
+                              _map_zoom, _map_canvas_buf, 308, 138, outdoor);
+  _map_last_render_ms = lv_tick_get();
+  _map_render_dirty = false;
+  if (_map_canvas_obj) lv_obj_invalidate(_map_canvas_obj);
+}
+
 void App::buildMapView(lv_obj_t* parent) {
   bool outdoor = _store.uiPrefs().outdoor_high_contrast;
   const auto& p = Theme::palette(outdoor);
@@ -3532,44 +3587,20 @@ void App::buildMapView(lv_obj_t* parent) {
   const auto& trk = _store.gpsTrack();
   const auto& st = _store.status();
 
-  // Without a GPS fix: the manual position, else the region's centre (or the SD tiles when the
-  // card does not cover that centre at this zoom).
-  double base_lat = _store.regionInfo().map_lat;
-  double base_lon = _store.regionInfo().map_lon;
-  double sd_lat = 0.0, sd_lon = 0.0;
-  int sd_zoom = -1;
-  bool has_sd_default = _tiles.getDefaultTileCenter(sd_lat, sd_lon, sd_zoom);
-  if (!_map_sd_synced && has_sd_default && sd_zoom >= 1 && sd_zoom <= 18) {
-    _map_zoom = sd_zoom;
-    _map_sd_synced = true;
-  }
-
-  if (g.valid) {
-    base_lat = g.lat_deg;
-    base_lon = g.lon_deg;
-  } else if (st.manual_lat_deg != 0.0 || st.manual_lon_deg != 0.0) {
-    base_lat = st.manual_lat_deg;
-    base_lon = st.manual_lon_deg;
-  } else if (has_sd_default) {
-    int ch_tx = 0, ch_ty = 0, ch_px = 0, ch_py = 0;
-    geomath::latLonToTilePixel(base_lat, base_lon, _map_zoom, ch_tx, ch_ty, ch_px, ch_py);
-    if (!_tiles.hasTile(_map_zoom, ch_tx, ch_ty)) {
-      base_lat = sd_lat;
-      base_lon = sd_lon;
-    }
-  }
-
+  double base_lat = 0.0, base_lon = 0.0;
+  computeMapBase(base_lat, base_lon);
   double clat = base_lat + _map_pan_lat_offset;
   double clon = base_lon + _map_pan_lon_offset;
 
   // Render slippy-tile / procedural viewport into _map_canvas_buf (308x138)
-  _tiles.renderViewportRgb565(clat, clon, _map_zoom, _map_canvas_buf, 308, 138, outdoor);
+  renderMapCanvas();
 
   lv_obj_t* canvas = lv_canvas_create(parent);
   lv_canvas_set_buffer(canvas, _map_canvas_buf, 308, 138, LV_COLOR_FORMAT_RGB565);
   lv_obj_set_size(canvas, 308, 138);
   lv_obj_add_flag(canvas, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_remove_flag(canvas, LV_OBJ_FLAG_SCROLLABLE);
+  _map_canvas_obj = canvas;
 
   // Touch drag/pan directly on the map canvas
   lv_obj_add_event_cb(canvas, [](lv_event_t* e) {
@@ -3595,37 +3626,20 @@ void App::buildMapView(lv_obj_t* parent) {
         self->_map_pan_lon_offset -= double(dx) * deg_per_px;
         self->_map_pan_lat_offset += double(dy) * deg_per_px * 0.70;
 
-        // Re-render tile viewport in-place during drag without destroying the canvas object
-        double b_lat = self->_store.regionInfo().map_lat;
-        double b_lon = self->_store.regionInfo().map_lon;
-        double s_lat = 0.0, s_lon = 0.0;
-        int s_z = -1;
-        bool has_sd = self->_tiles.getDefaultTileCenter(s_lat, s_lon, s_z);
-        if (self->_store.gps().valid) {
-          b_lat = self->_store.gps().lat_deg;
-          b_lon = self->_store.gps().lon_deg;
-        } else if (self->_store.status().manual_lat_deg != 0.0 || self->_store.status().manual_lon_deg != 0.0) {
-          b_lat = self->_store.status().manual_lat_deg;
-          b_lon = self->_store.status().manual_lon_deg;
-        } else if (has_sd) {
-          int tx = 0, ty = 0, px = 0, py = 0;
-          geomath::latLonToTilePixel(b_lat, b_lon, self->_map_zoom, tx, ty, px, py);
-          if (!self->_tiles.hasTile(self->_map_zoom, tx, ty)) {
-            b_lat = s_lat;
-            b_lon = s_lon;
-          }
+        // Coalesce pan renders: touch delivers PRESSING far faster than the panel can be redrawn,
+        // and a render may have to decode a tile. At most one render per 40 ms; the rest are
+        // folded into the next App::tick().
+        self->_map_render_dirty = true;
+        const uint32_t now = lv_tick_get();
+        if (now - self->_map_last_render_ms >= 40U) {
+          self->renderMapCanvas();
         }
-        self->_tiles.renderViewportRgb565(
-            b_lat + self->_map_pan_lat_offset,
-            b_lon + self->_map_pan_lon_offset,
-            self->_map_zoom, self->_map_canvas_buf, 308, 138,
-            self->_store.uiPrefs().outdoor_high_contrast);
-        lv_obj_invalidate(static_cast<lv_obj_t*>(lv_event_get_target(e)));
       }
     } else if (code == LV_EVENT_RELEASED) {
-      if (self->_map_drag_moved) {
+      if (self->_map_drag_moved || self->_map_render_dirty) {
         self->_map_drag_moved = false;
-        self->renderBody();
+        self->_map_render_dirty = false;
+        self->renderBody();  // refresh pins/HUD once, after the final canvas render
       }
     }
   }, LV_EVENT_ALL, this);
@@ -4513,13 +4527,14 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_set_style_text_font(wlbl, &faro_font_mono_12, 0);
     lv_obj_set_style_text_color(wlbl, p.text_primary, 0);
     lv_label_set_text_fmt(wlbl,
-                          "WiFi:%s | %s (%s)\n"
-                          "SSID: %.18s | Pwd: %s",
+                          "WiFi:%s %s (%s)\n"
+                          "Auth:%s | %.16s | %s",
                           st.wifi_enabled ? "ON" : "OFF",
                           st.wifi_connected ? "CONNECTED" : "DISCONN",
                           st.wifi_connected ? st.wifi_ip : "DHCP",
+                          st.wifi_auth_enabled ? "PSK" : "OPEN",
                           st.wifi_ssid[0] ? st.wifi_ssid : "(not set)",
-                          st.wifi_pwd[0] ? "********" : "(empty)");
+                          st.wifi_pwd[0] ? "Pwd:set" : "Pwd:none");
 
     // Scanned Wi-Fi Networks Dropdown + [Scan WiFi] button (y = 32)
     char w_opts[384] = {0};

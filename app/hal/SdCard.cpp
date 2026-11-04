@@ -36,6 +36,11 @@ const char* baseNameOf(const char* path) {
 
 bool SdCard::begin() {
 #if defined(ARDUINO) && defined(LILYGO_TDECK)
+  // A missing card used to re-run SD.begin() and SPI.end()/begin() on every tile lookup, i.e. on
+  // the bus shared with the LoRa radio and the panel. Fail fast for 30 s between real retries.
+  if (!_mounted && _last_mount_fail_ms != 0 && millis() - _last_mount_fail_ms < 30000U) {
+    return false;
+  }
   pinMode(9, OUTPUT);
   digitalWrite(9, HIGH);
   pinMode(12, OUTPUT);
@@ -76,15 +81,19 @@ bool SdCard::begin() {
     pinMode(kPinMiso, INPUT_PULLUP);
     gpio_pullup_en((gpio_num_t)kPinMiso);
     _mounted = false;
+    _last_mount_fail_ms = millis();
     return false;
   }
   uint8_t card_type = SD.cardType();
   if (card_type == CARD_NONE) {
     digitalWrite(kPinCs, HIGH);
     _mounted = false;
+    _last_mount_fail_ms = millis();
     return false;
   }
   _mounted = true;
+  _last_mount_fail_ms = 0;
+  for (size_t i = 0; i < kTileMissSlots; ++i) _tile_misses[i] = TileMiss{};
   _total_mb = uint32_t(SD.totalBytes() / (1024ULL * 1024ULL));
   _used_mb  = uint32_t(SD.usedBytes() / (1024ULL * 1024ULL));
   ensureFaroDirs();
@@ -100,6 +109,19 @@ bool SdCard::begin() {
   _mounted = false;
   return false;
 #endif
+}
+
+bool SdCard::tileMissCached(int z, int x, int y) const {
+  for (size_t i = 0; i < kTileMissSlots; ++i) {
+    const TileMiss& m = _tile_misses[i];
+    if (m.z == z && m.x == x && m.y == y) return true;
+  }
+  return false;
+}
+
+void SdCard::rememberTileMiss(int z, int x, int y) {
+  _tile_misses[_tile_miss_next] = TileMiss{z, x, y};
+  _tile_miss_next = (_tile_miss_next + 1) % kTileMissSlots;
 }
 
 bool SdCard::probeTileRoot(const char* root_dir) {
@@ -469,6 +491,7 @@ int32_t SdCard::readTileFile(int z, int x, int y, uint8_t* buf, size_t max_len,
                              char* out_ext, size_t ext_max) {
 #ifdef ARDUINO
   if (!buf || max_len == 0 || z < 0 || z > 18 || x < 0 || y < 0) return -1;
+  if (tileMissCached(z, x, y)) return -1;
   if (!_mounted && !begin()) return -1;
 
   char path[112] = {0};
@@ -486,6 +509,10 @@ int32_t SdCard::readTileFile(int z, int x, int y, uint8_t* buf, size_t max_len,
       }
       return n;
     }
+    // The discovered root/extension is authoritative for this zoom. Probing 5 roots x 4
+    // extensions on every missing tile is what made a map pan block the mesh loop.
+    rememberTileMiss(z, x, y);
+    return -1;
   }
 
   // 2. Fallback across common roots and extensions
@@ -507,6 +534,7 @@ int32_t SdCard::readTileFile(int z, int x, int y, uint8_t* buf, size_t max_len,
       }
     }
   }
+  rememberTileMiss(z, x, y);
   return -1;
 #else
   (void)z; (void)x; (void)y; (void)buf; (void)max_len; (void)out_ext; (void)ext_max;

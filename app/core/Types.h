@@ -339,6 +339,7 @@ struct SystemStatus {
   uint32_t ble_pin = 123456;
   bool     wifi_enabled = true;
   bool     wifi_connected = false;
+  bool     wifi_auth_enabled = false;  // Sixi: /faro/wifi_psk.bin found, TCP 5000 guarded
   char     wifi_ssid[33] = {0};
   char     wifi_pwd[65] = {0};
   char     wifi_ip[16] = "0.0.0.0";

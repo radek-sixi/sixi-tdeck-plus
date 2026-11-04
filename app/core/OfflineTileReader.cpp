@@ -150,18 +150,17 @@ bool OfflineTileReader::hasTile(int z, int x, int y) {
   bool found = false;
   bool decoded = false;
   if (_fs) {
-    if (!_cache[lru_idx].pixels) {
-      _cache[lru_idx].pixels = allocTilePixels();
-    }
-    if (_cache[lru_idx].pixels && _fs->readTileRgb565(z, x, y, _cache[lru_idx].pixels)) {
-      found = true;
-      decoded = true;
+    // Never decode a tile just to answer "is it there": hasTile() runs on every map build, and a
+    // PNG decode is two orders of magnitude more expensive than a file lookup.
+    const int exists = _fs->tileExists(z, x, y);
+    if (exists >= 0) {
+      found = (exists != 0);
     } else {
-      char path[96] = {0};
-      formatTilePath(z, x, y, path, sizeof(path), "png");
-      uint8_t header[16] = {0};
-      if (_fs->readTileFile(path, header, sizeof(header)) > 0) {
+      // Legacy test/mock filesystem: the only way to know is to decode it once.
+      if (!_cache[lru_idx].pixels) _cache[lru_idx].pixels = allocTilePixels();
+      if (_cache[lru_idx].pixels && _fs->readTileRgb565(z, x, y, _cache[lru_idx].pixels)) {
         found = true;
+        decoded = true;
       }
     }
   }
@@ -262,27 +261,31 @@ void OfflineTileReader::renderViewportRgb565(double center_lat, double center_lo
   const int32_t top_left_wx = world_cx - (width / 2);
   const int32_t top_left_wy = world_cy - (height / 2);
 
-  // 1. Base procedural topographic/grid background (used wherever SD tiles are absent)
+  // 1. Base procedural grid background (used wherever SD tiles are absent).
+  // Fill once and copy the row: a per-pixel modulo/division loop used to dominate pan frames.
   const uint16_t bg_col     = outdoor_high_contrast ? 0xF7DF : 0x0862;  // #F8F9FA Google Maps Light vs dark slate
   const uint16_t sub_grid   = outdoor_high_contrast ? 0xE73D : 0x10E4;  // #E8EAED subtle 32px grid
   const uint16_t tile_grid  = outdoor_high_contrast ? 0xD6BA : 0x2188;  // #DADCE0 256px tile boundary
-  const uint16_t contour    = outdoor_high_contrast ? 0xCE7A : 0x1145;  // #CEEAD6 Google Maps elevation contour
 
+  for (int x = 0; x < width; ++x) dst_rgb565[x] = bg_col;
+  for (int y = 1; y < height; ++y) {
+    memcpy(dst_rgb565 + (y * width), dst_rgb565, size_t(width) * sizeof(uint16_t));
+  }
+
+  // Horizontal grid lines, then vertical ones. The old test did two bit-masks and a 64-bit
+  // multiply/modulo for every single pixel (signed overflow above z=8 as well).
   for (int y = 0; y < height; ++y) {
     const int32_t wy = top_left_wy + y;
+    const uint16_t c = ((wy & 255) == 0) ? tile_grid : (((wy & 31) == 0) ? sub_grid : 0);
+    if (c == 0) continue;
     uint16_t* row = dst_rgb565 + (y * width);
-    for (int x = 0; x < width; ++x) {
-      const int32_t wx = top_left_wx + x;
-      uint16_t c = bg_col;
-      if ((wx & 255) == 0 || (wy & 255) == 0) {
-        c = tile_grid;
-      } else if ((wx & 31) == 0 || (wy & 31) == 0) {
-        c = sub_grid;
-      } else if (((wx * wx + wy * wy) / 180) % 29 == 0) {
-        c = contour;
-      }
-      row[x] = c;
-    }
+    for (int x = 0; x < width; ++x) row[x] = c;
+  }
+  for (int x = 0; x < width; ++x) {
+    const int32_t wx = top_left_wx + x;
+    const uint16_t c = ((wx & 255) == 0) ? tile_grid : (((wx & 31) == 0) ? sub_grid : 0);
+    if (c == 0) continue;
+    for (int y = 0; y < height; ++y) dst_rgb565[(y * width) + x] = c;
   }
 
   // 2. Composite real decoded SD tiles (with up to 4 levels of parent-tile overzoom fallback)

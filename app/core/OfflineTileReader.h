@@ -12,6 +12,13 @@ public:
   virtual ~ITileFileSystem() = default;
   virtual int32_t readTileFile(const char* path, uint8_t* buf, size_t max_len) = 0;
 
+  // Existence check that must not decode the tile. Returns 1 = present, 0 = absent and
+  // -1 = unknown (the caller may fall back to a decoding probe).
+  virtual int tileExists(int z, int x, int y) {
+    (void)z; (void)x; (void)y;
+    return -1;
+  }
+
   // Optional enriched tile reader: reads & decodes tile (z, x, y) into a 256x256 RGB565 buffer.
   virtual bool readTileRgb565(int z, int x, int y, uint16_t* out_256x256) {
     (void)z; (void)x; (void)y; (void)out_256x256;
@@ -38,7 +45,9 @@ struct TileKey {
 
 class OfflineTileReader {
 public:
-  static constexpr size_t kCacheSlots = 4;
+  // A 308x138 viewport can span 2x2 tiles, and a pan across a corner touches 3x3. Nine slots keep
+  // a whole 3x3 neighbourhood resident so dragging does not evict and re-decode tiles.
+  static constexpr size_t kCacheSlots = 9;
 
   explicit OfflineTileReader(ITileFileSystem* fs = nullptr) : _fs(fs) {}
   ~OfflineTileReader();

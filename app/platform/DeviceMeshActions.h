@@ -96,6 +96,7 @@ public:
   bool exportGpsTrackGpx(char* out_path, size_t max_len) override;
 
 private:
+  void startWifiTransport();
   void enforceRadioPolicy();
   void applyRadioConfig(const core::RadioConfig& applied);
   core::RadioConfig radioFromPrefs() const;
@@ -123,6 +124,8 @@ private:
   NodePrefs* _prefs = nullptr;
   hal::SdCard* _sd = nullptr;
   uint32_t _last_poll_ms = 0;
+  uint32_t _wifi_disconnected_since_ms = 0;  // first poll that saw no WiFi link; 0 = connected/off
+  bool     _wifi_transport_started = false;
   uint32_t _reboot_at_ms = 0;  // pending restart after an identity import
   static constexpr size_t kDutySlots = 61;  // 60 one-minute intervals
   uint32_t _duty_ms[kDutySlots] = {};

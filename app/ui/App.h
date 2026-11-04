@@ -83,6 +83,8 @@ private:
   void buildContactDetailView(lv_obj_t* parent);
   void buildTracePathView(lv_obj_t* parent);
   void buildMapView(lv_obj_t* parent);
+  void computeMapBase(double& out_lat, double& out_lon);
+  void renderMapCanvas();
   void buildSettingsView(lv_obj_t* parent);
   void buildDiagnosticsView(lv_obj_t* parent);
   void buildBootWizardView(lv_obj_t* parent);
@@ -102,6 +104,9 @@ private:
   int32_t  _map_drag_last_x = 0;
   int32_t  _map_drag_last_y = 0;
   bool     _map_drag_moved = false;
+  bool     _map_render_dirty = false;
+  uint32_t _map_last_render_ms = 0;
+  lv_obj_t* _map_canvas_obj = nullptr;
   bool     _show_tracks_overlay = true;
   uint8_t  _contact_filter = 0;       // 0=All, 1=Chat, 2=RPT, 3=Room, 4=Sens, 5=Fav, 6=Tag
   uint8_t  _discover_filter = 0;      // 0=All, 1=RPT, 2=Room, 3=Chat, 4=Sens
@@ -131,6 +136,7 @@ private:
   int32_t  _calc_cur = 0;
   char     _calc_op = 0;
   uint32_t _last_rendered_version = 0;
+  uint32_t _last_status_ms = 0;
   uint32_t _last_bot_msg_id = 0;
   uint32_t _last_deadman_tick_ms = 0;
 

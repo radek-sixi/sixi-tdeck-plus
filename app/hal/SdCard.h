@@ -43,8 +43,15 @@ public:
 
 private:
   bool probeTileRoot(const char* root_dir);
+  bool tileMissCached(int z, int x, int y) const;
+  void rememberTileMiss(int z, int x, int y);
 
   bool _mounted = false;
+  uint32_t _last_mount_fail_ms = 0;
+  struct TileMiss { int32_t z = -1, x = -1, y = -1; };
+  static constexpr size_t kTileMissSlots = 8;
+  TileMiss _tile_misses[kTileMissSlots] = {};
+  size_t _tile_miss_next = 0;
   uint32_t _total_mb = 0;
   uint32_t _used_mb = 0;
   char _tile_root[64] = "/faro/maps";

@@ -98,6 +98,18 @@ void DeviceMeshActions::begin(mesh::MainBoard* board, MultiSerialInterface* ifac
   }
 #endif
 
+#if defined(ENABLE_WIFI_INTERFACE)
+  // The TCP listener exists only when WiFi has credentials at boot (upstream main.cpp). If the
+  // user enters them later from Settings, setWifiConfig() calls the same helper.
+  if (_prefs && _prefs->wifi_enabled && _prefs->wifi_ssid[0]) {
+    startWifiTransport();
+#if defined(ESP32)
+    // ESP-IDF aborts WiFi+BLE coexistence when modem sleep is disabled
+    // ("Should enable WiFi modem sleep when both WiFi and Bluetooth are enabled").
+    WiFi.setSleep(true);
+#endif
+  }
+#endif
 
   syncStore();
 
@@ -108,6 +120,30 @@ void DeviceMeshActions::begin(mesh::MainBoard* board, MultiSerialInterface* ifac
   } else {
     st.last_rangetest_csv[0] = '\0';
   }
+}
+
+void DeviceMeshActions::startWifiTransport() {
+#if defined(ENABLE_WIFI_INTERFACE)
+  if (!_ifaces) return;
+
+  if (!_wifi_transport_started) {
+    // At boot upstream main.cpp already called wifi_interface.begin(TCP_PORT) and the interface
+    // manager enabled it. Only open the listener when WiFi was configured later from Settings.
+    if (!wifi_interface.isEnabled()) wifi_interface.begin(5000);
+    _wifi_transport_started = true;
+  }
+
+  bool guarded = false;
+
+  _ifaces->removeInterface(&wifi_interface);
+  // MultiSerialInterface::addInterface() does not enable the interface. When WiFi is configured
+  // after boot (Settings > WiFi), the earlier startInterface()->enable() already ran, so without
+  // this call the listener accepted TCP clients but the mesh loop never polled it.
+  wifi_interface.enable();
+  _ifaces->addInterface(InterfaceType::WiFi, &wifi_interface);
+  _store.status().wifi_auth_enabled = guarded;
+  Serial.printf("[FARO-WIFI] transport ready (guarded=%d, port=5000)\n", int(guarded));
+#endif
 }
 
 void DeviceMeshActions::startRadioPolicy(bool region_was_saved) {
@@ -365,9 +401,42 @@ void DeviceMeshActions::pollTelemetry(uint32_t now_ms, uint16_t batt_mv, uint8_t
   st.free_heap = ESP.getFreeHeap();
   st.free_psram = ESP.getFreePsram();
 #ifdef ENABLE_WIFI_INTERFACE
-  st.wifi_connected = (_prefs && _prefs->wifi_enabled && _prefs->wifi_ssid[0] && WiFi.status() == WL_CONNECTED);
-  if (st.wifi_connected) {
-    strncpy(st.wifi_ip, WiFi.localIP().toString().c_str(), sizeof(st.wifi_ip) - 1);
+  const bool wifi_was_connected = st.wifi_connected;
+  char wifi_old_ip[sizeof(st.wifi_ip)];
+  strncpy(wifi_old_ip, st.wifi_ip, sizeof(wifi_old_ip) - 1);
+  wifi_old_ip[sizeof(wifi_old_ip) - 1] = '\0';
+  if (_prefs && _prefs->wifi_enabled && _prefs->wifi_ssid[0]) {
+    const bool connected = (WiFi.status() == WL_CONNECTED);
+    st.wifi_connected = connected;
+    if (connected) {
+      _wifi_disconnected_since_ms = 0;
+      ::wifi_needs_reconnect = false;
+      strncpy(st.wifi_ip, WiFi.localIP().toString().c_str(), sizeof(st.wifi_ip) - 1);
+      st.wifi_ip[sizeof(st.wifi_ip) - 1] = '\0';
+    } else {
+      strncpy(st.wifi_ip, "0.0.0.0", sizeof(st.wifi_ip) - 1);
+      // Upstream's reconnect loop only retries when this flag is set. It is normally set by the
+      // event handler registered in main.cpp, but that handler does not exist when WiFi was
+      // configured from Settings after boot. Poll here so a runtime-configured link also retries.
+      if (_wifi_disconnected_since_ms == 0) {
+        _wifi_disconnected_since_ms = now_ms;
+      } else if (now_ms - _wifi_disconnected_since_ms > 10000U) {
+        ::wifi_needs_reconnect = true;
+      }
+    }
+  } else {
+    st.wifi_connected = false;
+    ::wifi_needs_reconnect = false;
+    _wifi_disconnected_since_ms = 0;
+  }
+  // The Settings/WiFi page and the status bar only redraw on a store version change.
+  if (wifi_was_connected != st.wifi_connected || strcmp(wifi_old_ip, st.wifi_ip) != 0) {
+    if (st.wifi_connected) {
+      Serial.printf("[FARO-WIFI] connected to '%s', ip=%s\n", _prefs->wifi_ssid, st.wifi_ip);
+    } else if (wifi_was_connected) {
+      Serial.printf("[FARO-WIFI] link lost (status=%d), retrying\n", int(WiFi.status()));
+    }
+    _store.bumpVersion();
   }
 #endif
   if (_ifaces) {
@@ -859,20 +928,25 @@ bool DeviceMeshActions::setWifiConfig(bool enabled, const char* ssid, const char
   if (enabled && _prefs->wifi_ssid[0]) {
     board.setInhibitSleep(true);
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(true);  // required for ESP32-S3 single-antenna Wi-Fi + BLE coexistence
+    // Required by ESP-IDF while BLE is also enabled; disabling it aborts at WiFi start.
+    WiFi.setSleep(true);
     WiFi.setAutoReconnect(true);
     WiFi.disconnect();
     WiFi.begin(_prefs->wifi_ssid, _prefs->wifi_pwd);
-    static bool s_wifi_iface_started = false;
-    if (!s_wifi_iface_started && _ifaces) {
-      s_wifi_iface_started = true;
-      wifi_interface.begin(5000);
-      _ifaces->addInterface(InterfaceType::WiFi, &wifi_interface);
-    }
+    startWifiTransport();
+    _wifi_disconnected_since_ms = millis();
   } else if (!enabled) {
+#ifdef ENABLE_WIFI_INTERFACE
+    wifi_interface.disable();  // stop polling a socket whose netif is about to go away
+    _wifi_transport_started = false;
+#endif
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);  // power the modem down: disconnect() alone leaves the radio on
     _store.status().wifi_connected = false;
+    strncpy(_store.status().wifi_ip, "0.0.0.0", sizeof(_store.status().wifi_ip) - 1);
+    _store.status().wifi_ip[sizeof(_store.status().wifi_ip) - 1] = '\0';
+    _store.status().wifi_auth_enabled = false;
+    _wifi_disconnected_since_ms = 0;
   }
 #endif
   _store.bumpVersion();
@@ -905,47 +979,73 @@ size_t DeviceMeshActions::scanWifiNetworks(char ssids[][33], int16_t rssis[], si
     esp_wifi_scan_get_ap_num(&ap_num);
   }
   size_t out = 0;
+  auto add_ap = [&](const char* s, int rssi) {
+    if (!s || !s[0] || out >= max_networks) return;
+    for (size_t j = 0; j < out; ++j) {
+      if (strncmp(ssids[j], s, 32) == 0) return;
+    }
+    strncpy(ssids[out], s, 32);
+    ssids[out][32] = '\0';
+    if (rssis) rssis[out] = int16_t(rssi);
+    ++out;
+  };
+
+  uint16_t fetch_num = 0;
+  esp_err_t records_err = ESP_FAIL;
   if (err == ESP_OK && ap_num > 0) {
-    uint16_t fetch_num = ap_num > 24 ? 24 : ap_num;
+    fetch_num = ap_num > 24 ? 24 : ap_num;
     wifi_ap_record_t* recs = static_cast<wifi_ap_record_t*>(calloc(fetch_num, sizeof(wifi_ap_record_t)));
     if (recs) {
-      if (esp_wifi_scan_get_ap_records(&fetch_num, recs) == ESP_OK) {
-        // Sort strongest RSSI first
+      records_err = esp_wifi_scan_get_ap_records(&fetch_num, recs);
+      if (records_err == ESP_OK) {
         for (uint16_t i = 0; i < fetch_num; ++i) {
-          for (uint16_t j = i + 1; j < fetch_num; ++j) {
-            if (recs[j].rssi > recs[i].rssi) {
-              wifi_ap_record_t tmp = recs[i];
-              recs[i] = recs[j];
-              recs[j] = tmp;
-            }
-          }
-        }
-        for (uint16_t i = 0; i < fetch_num && out < max_networks; ++i) {
           const char* s = reinterpret_cast<const char*>(recs[i].ssid);
-          if (!s[0]) continue;
-          bool dup = false;
-          for (size_t j = 0; j < out; ++j) {
-            if (strncmp(ssids[j], s, 32) == 0) {
-              dup = true;
-              break;
-            }
+          if (!s[0]) {
+            Serial.printf("[FARO-WIFI]   hidden AP %d dBm (type the SSID manually)\n", int(recs[i].rssi));
+            continue;
           }
-          if (dup) continue;
-          strncpy(ssids[out], s, 32);
-          ssids[out][32] = '\0';
-          if (rssis) rssis[out] = int16_t(recs[i].rssi);
-          ++out;
+          add_ap(s, recs[i].rssi);
         }
       }
       free(recs);
     }
-  } else {
-    esp_wifi_clear_ap_list();
   }
-  Serial.printf("[FARO-WIFI] scan: err=%d ap_num=%u out=%zu (heap=%u)\n",
-                int(err), unsigned(ap_num), out, unsigned(ESP.getFreeHeap()));
+  esp_wifi_clear_ap_list();  // release the driver's scan results, otherwise each scan leaks
+
+  // The raw path can return ap_num > 0 but zero records on some core/IDF combinations. Fall back
+  // to the Arduino API (which uses its own scan config) instead of showing an empty list.
+  int fallback_n = -1;
+  if (out == 0) {
+    fallback_n = WiFi.scanNetworks(false, true, false, 120);
+    if (fallback_n > 0) {
+      for (int16_t i = 0; i < fallback_n; ++i) {
+        String name = WiFi.SSID(i);
+        if (name.length()) add_ap(name.c_str(), WiFi.RSSI(i));
+      }
+      WiFi.scanDelete();
+    }
+  }
+
+  // Strongest first, whichever path produced the list.
+  for (size_t i = 0; i < out; ++i) {
+    for (size_t j = i + 1; j < out; ++j) {
+      if (rssis && rssis[j] > rssis[i]) {
+        int16_t tr = rssis[i]; rssis[i] = rssis[j]; rssis[j] = tr;
+        char tn[33]; memcpy(tn, ssids[i], sizeof(tn)); memcpy(ssids[i], ssids[j], sizeof(tn));
+        memcpy(ssids[j], tn, sizeof(tn));
+      }
+    }
+  }
+  Serial.printf("[FARO-WIFI] scan: err=%d records_err=%d ap_num=%u fetch=%u fallback=%d out=%zu (heap=%u)\n",
+                int(err), int(records_err), unsigned(ap_num), unsigned(fetch_num), fallback_n, out,
+                unsigned(ESP.getFreeHeap()));
+  for (size_t i = 0; i < out; ++i) {
+    Serial.printf("[FARO-WIFI]   AP '%s' %d dBm\n", ssids[i], int(rssis ? rssis[i] : 0));
+  }
   if (!_prefs || !_prefs->wifi_enabled) {
     WiFi.mode(WIFI_OFF);
+  } else {
+    WiFi.setSleep(true);  // ESP-IDF requires modem sleep while BLE is also enabled
   }
   return out;
 #else
