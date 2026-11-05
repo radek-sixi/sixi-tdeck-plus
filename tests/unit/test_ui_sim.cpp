@@ -271,6 +271,16 @@ int main() {
   assert(actions.setBlePin(0));
   assert(store.status().ble_pin >= 100000 && store.status().ble_pin <= 999999);
 
+  // Easter egg: typing "snake" outside a text field opens the game; run some game ticks.
+  app.showScreen(faro::ui::ScreenId::Home);
+  for (const char* p = "snake"; *p; ++p) app.onKeyPress(uint8_t(*p));
+  assert(app.currentScreen() == faro::ui::ScreenId::Game);
+  for (int i = 0; i < 120; ++i) app.tick(90000U + uint32_t(i) * 200U);
+  assert(app.currentScreen() == faro::ui::ScreenId::Game);
+  lv_tick_inc(25);
+  lv_timer_handler();
+  lv_refr_now(disp);
+
   printf("[PASS] test_ui_sim (all screens x 4 languages)\n");
   return 0;
 }

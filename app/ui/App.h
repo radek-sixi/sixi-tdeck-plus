@@ -25,6 +25,7 @@ enum class ScreenId : uint8_t {
   Settings,
   Diagnostics,
   BootWizard,
+  Game,
   _Count
 };
 
@@ -88,6 +89,21 @@ private:
   void buildSettingsView(lv_obj_t* parent);
   void buildDiagnosticsView(lv_obj_t* parent);
   void buildBootWizardView(lv_obj_t* parent);
+  void buildGameView(lv_obj_t* parent);
+
+  // Easter egg: a small Snake game (touch swipe, WASD, trackball/keyboard pause).
+  enum class SnakeDir : uint8_t { Up, Down, Left, Right };
+  static constexpr int kSnakeCols = 20;
+  static constexpr int kSnakeRows = 12;
+  static constexpr int kSnakeCellPx = 11;
+  static constexpr int kSnakeMax = kSnakeCols * kSnakeRows;
+  void snakeReset();
+  void snakeStep();
+  void snakeSetDirection(SnakeDir dir);
+  void snakeTick(uint32_t now_ms);
+  void renderSnakeCanvas();
+  void updateSnakeHud();
+  void snakeSpawnFood();
 
   core::AppStore& _store;
   core::IMeshActions& _actions;
@@ -163,6 +179,25 @@ private:
 
   uint16_t _map_canvas_buf[308 * 144] = {0};
   size_t   _order[core::AppStore::kMaxContacts] = {};  // sorted list rows (one view at a time)
+
+  // Snake easter egg. The 308x138 canvas reuses _map_canvas_buf, so it costs no extra framebuffer.
+  uint8_t  _snake_cells[kSnakeMax] = {};
+  uint8_t  _snake_len = 0;
+  uint8_t  _snake_food = 0;
+  SnakeDir _snake_dir = SnakeDir::Right;
+  SnakeDir _snake_next_dir = SnakeDir::Right;
+  uint32_t _snake_step_ms = 170;
+  uint32_t _snake_last_step_ms = 0;
+  uint16_t _snake_score = 0;
+  uint16_t _snake_best = 0;
+  bool     _snake_game_over = false;
+  bool     _snake_paused = false;
+  int16_t  _snake_drag_x = 0;
+  int16_t  _snake_drag_y = 0;
+  lv_obj_t* _snake_canvas = nullptr;
+  lv_obj_t* _snake_score_lbl = nullptr;
+  lv_obj_t* _snake_status_lbl = nullptr;
+  lv_obj_t* _snake_pause_lbl = nullptr;
 };
 
 }  // namespace faro::ui

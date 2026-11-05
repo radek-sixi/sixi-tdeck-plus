@@ -324,6 +324,7 @@ const char* App::screenSlug(ScreenId id) {
     case ScreenId::Settings:      return "13_settings";
     case ScreenId::Diagnostics:   return "14_diagnostics";
     case ScreenId::BootWizard:    return "15_boot_wizard";
+    case ScreenId::Game:          return "16_snake";
     default:                      return "unknown";
   }
 }
@@ -366,6 +367,18 @@ bool containsKeywordIgnoreCase(const char* haystack, const char* needle) {
 void drawCanvasPixel(uint16_t* buf, int w, int h, int x, int y, uint16_t rgb565) {
   if (x >= 0 && x < w && y >= 0 && y < h) {
     buf[y * w + x] = rgb565;
+  }
+}
+
+void fillCanvasRect(uint16_t* buf, int w, int h, int x, int y, int rw, int rh, uint16_t rgb565) {
+  if (!buf || rw <= 0 || rh <= 0) return;
+  const int x0 = x < 0 ? 0 : x;
+  const int y0 = y < 0 ? 0 : y;
+  const int x1 = (x + rw) > w ? w : (x + rw);
+  const int y1 = (y + rh) > h ? h : (y + rh);
+  for (int py = y0; py < y1; ++py) {
+    uint16_t* row = buf + (py * w);
+    for (int px = x0; px < x1; ++px) row[px] = rgb565;
   }
 }
 
@@ -466,6 +479,8 @@ void App::tick(uint32_t now_ms) {
     }
   }
 
+
+  if (_current_screen == ScreenId::Game) snakeTick(now_ms);
 
   if (_store.version() != _last_rendered_version) {
     updateStatusBar();
@@ -634,6 +649,50 @@ void App::onKeyPress(uint8_t key) {
     }
   }
 
+  // Snake controls when the Easter egg screen is open.
+  if (_current_screen == ScreenId::Game) {
+    const uint8_t k = (key >= 'A' && key <= 'Z') ? uint8_t(key + 32) : key;
+    if (k == 'w') { snakeSetDirection(SnakeDir::Up); return; }
+    if (k == 's') { snakeSetDirection(SnakeDir::Down); return; }
+    if (k == 'a') { snakeSetDirection(SnakeDir::Left); return; }
+    if (k == 'd') { snakeSetDirection(SnakeDir::Right); return; }
+    if (k == ' ') {
+      if (!_snake_game_over) {
+        _snake_paused = !_snake_paused;
+        _snake_last_step_ms = 0;
+        updateSnakeHud();
+      }
+      return;
+    }
+    if (k == 'n') { snakeReset(); return; }
+    if (k == 'q') { showScreen(ScreenId::Home); return; }
+    return;
+  }
+
+  // Easter egg: type "snake" while no text field is focused.
+  {
+    static char secret[5] = {0};
+    static uint8_t secret_len = 0;
+    const uint8_t k = (key >= 'A' && key <= 'Z') ? uint8_t(key + 32) : key;
+    if (k >= 'a' && k <= 'z') {
+      if (secret_len >= sizeof(secret)) {
+        memmove(secret, secret + 1, sizeof(secret) - 1);
+        secret[sizeof(secret) - 1] = char(k);
+      } else {
+        secret[secret_len++] = char(k);
+      }
+      if (secret_len == sizeof(secret) && memcmp(secret, "snake", sizeof(secret)) == 0) {
+        secret_len = 0;
+        _snake_len = 0;  // always start a fresh run from the Easter egg
+        snakeReset();
+        showScreen(ScreenId::Game);
+        return;
+      }
+    } else {
+      secret_len = 0;
+    }
+  }
+
   // Ripple UI shortcuts when not typing in a text box:
   // Space toggles Home <-> Map (or toggles Age/Hash column in Discover)
   if (key == ' ') {
@@ -733,6 +792,7 @@ void App::rebuildChrome() {
   bool hide_bottom_nav = (_current_screen == ScreenId::ChatThread ||
                           _current_screen == ScreenId::ChannelThread ||
                           _current_screen == ScreenId::BootWizard ||
+                          _current_screen == ScreenId::Game ||
                           _screen_locked ||
                           (_current_screen == ScreenId::Settings && !_settings_hub));
 
@@ -895,9 +955,14 @@ void App::renderBody() {
     _draft_key = 0xFFFFFFFFU;
   }
   lv_obj_clean(_body);
+  lv_obj_set_style_pad_row(_body, 5, 0);
   _compose_ta = nullptr;
   _map_canvas_obj = nullptr;
   _map_render_dirty = false;
+  _snake_canvas = nullptr;
+  _snake_score_lbl = nullptr;
+  _snake_status_lbl = nullptr;
+  _snake_pause_lbl = nullptr;
 
   switch (_current_screen) {
     case ScreenId::Home:          buildHomeView(_body); break;
@@ -913,6 +978,7 @@ void App::renderBody() {
     case ScreenId::Settings:      buildSettingsView(_body); break;
     case ScreenId::Diagnostics:   buildDiagnosticsView(_body); break;
     case ScreenId::BootWizard:    buildBootWizardView(_body); break;
+    case ScreenId::Game:          buildGameView(_body); break;
     default:                      buildHomeView(_body); break;
   }
 
@@ -958,6 +1024,312 @@ void App::renderBody() {
         lv_group_focus_obj(ta);
       }
     }, LV_EVENT_CLICKED, this);
+  }
+}
+
+void App::snakeSpawnFood() {
+  if (_snake_len >= kSnakeMax) {
+    _snake_game_over = true;
+    return;
+  }
+  uint8_t rnd[2] = {0};
+  for (int tries = 0; tries < kSnakeMax * 4; ++tries) {
+    core::fillRandom(rnd, sizeof(rnd));
+    const uint8_t idx = uint8_t((uint16_t(rnd[0]) | (uint16_t(rnd[1]) << 8)) % kSnakeMax);
+    bool used = false;
+    for (uint8_t i = 0; i < _snake_len; ++i) {
+      if (_snake_cells[i] == idx) { used = true; break; }
+    }
+    if (!used) {
+      _snake_food = idx;
+      return;
+    }
+  }
+  _snake_game_over = true;  // board is full
+}
+
+void App::snakeReset() {
+  _snake_len = 3;
+  const uint8_t cx = kSnakeCols / 2;
+  const uint8_t cy = kSnakeRows / 2;
+  _snake_cells[0] = uint8_t(cy * kSnakeCols + cx);
+  _snake_cells[1] = uint8_t(cy * kSnakeCols + cx - 1);
+  _snake_cells[2] = uint8_t(cy * kSnakeCols + cx - 2);
+  _snake_dir = SnakeDir::Right;
+  _snake_next_dir = SnakeDir::Right;
+  _snake_score = 0;
+  _snake_step_ms = 170;
+  _snake_game_over = false;
+  _snake_paused = false;
+  _snake_last_step_ms = 0;
+  snakeSpawnFood();
+  renderSnakeCanvas();
+  updateSnakeHud();
+}
+
+void App::snakeSetDirection(SnakeDir dir) {
+  if (_snake_game_over || _snake_paused) return;
+  const bool opposite =
+      (dir == SnakeDir::Up && _snake_dir == SnakeDir::Down) ||
+      (dir == SnakeDir::Down && _snake_dir == SnakeDir::Up) ||
+      (dir == SnakeDir::Left && _snake_dir == SnakeDir::Right) ||
+      (dir == SnakeDir::Right && _snake_dir == SnakeDir::Left);
+  if (!opposite) _snake_next_dir = dir;
+}
+
+void App::snakeStep() {
+  if (_snake_game_over || _snake_paused || _snake_len == 0) return;
+
+  _snake_dir = _snake_next_dir;
+  int hx = _snake_cells[0] % kSnakeCols;
+  int hy = _snake_cells[0] / kSnakeCols;
+  switch (_snake_dir) {
+    case SnakeDir::Up:    --hy; break;
+    case SnakeDir::Down:  ++hy; break;
+    case SnakeDir::Left:  --hx; break;
+    case SnakeDir::Right: ++hx; break;
+  }
+  hx = (hx + kSnakeCols) % kSnakeCols;  // wrap: friendlier with a swiped thumb
+  hy = (hy + kSnakeRows) % kSnakeRows;
+  const uint8_t new_head = uint8_t(hy * kSnakeCols + hx);
+  const bool ate = (new_head == _snake_food);
+
+  // The tail vacates its cell in the same step, so hitting it is not a collision unless we grow.
+  const uint8_t check_len = uint8_t(_snake_len - (ate ? 0 : 1));
+  for (uint8_t i = 0; i < check_len; ++i) {
+    if (_snake_cells[i] == new_head) {
+      _snake_game_over = true;
+      if (_snake_score > _snake_best) _snake_best = _snake_score;
+      updateSnakeHud();
+      return;
+    }
+  }
+
+  uint8_t new_len = uint8_t(_snake_len + (ate ? 1 : 0));
+  if (new_len > kSnakeMax) new_len = kSnakeMax;
+  for (int i = new_len - 1; i > 0; --i) _snake_cells[i] = _snake_cells[i - 1];
+  _snake_cells[0] = new_head;
+  _snake_len = new_len;
+
+  if (ate) {
+    _snake_score = uint16_t(_snake_score + 10);
+    if (_snake_score > _snake_best) _snake_best = _snake_score;
+    // 170 ms at the start, then a gentle ramp to 80 ms.
+    _snake_step_ms = (_snake_score >= 200) ? 80 : uint32_t(170 - int(_snake_score / 10) * 4);
+    if (_snake_len >= kSnakeMax) {
+      _snake_game_over = true;
+    } else {
+      snakeSpawnFood();
+    }
+  }
+
+  renderSnakeCanvas();
+  updateSnakeHud();
+}
+
+void App::snakeTick(uint32_t now_ms) {
+  if (_snake_game_over || _snake_paused || _snake_len == 0) {
+    _snake_last_step_ms = now_ms;
+    return;
+  }
+  if (_snake_last_step_ms == 0) {
+    _snake_last_step_ms = now_ms;
+    return;
+  }
+  if (now_ms - _snake_last_step_ms < _snake_step_ms) return;
+  _snake_last_step_ms = now_ms;
+  snakeStep();
+}
+
+void App::renderSnakeCanvas() {
+  const bool outdoor = _store.uiPrefs().outdoor_high_contrast;
+  const auto& p = Theme::palette(outdoor);
+  const uint16_t bg = lv_color_to_u16(p.bg);
+  const uint16_t board = lv_color_to_u16(p.surface);
+  const uint16_t grid = lv_color_to_u16(p.border);
+  const uint16_t body = lv_color_to_u16(p.success);
+  const uint16_t head = lv_color_to_u16(p.accent);
+  const uint16_t food = lv_color_to_u16(p.danger);
+
+  fillCanvasRect(_map_canvas_buf, 308, 138, 0, 0, 308, 138, bg);
+  const int bx = (308 - kSnakeCols * kSnakeCellPx) / 2;
+  const int by = (138 - kSnakeRows * kSnakeCellPx) / 2;
+  fillCanvasRect(_map_canvas_buf, 308, 138, bx - 1, by - 1,
+                 kSnakeCols * kSnakeCellPx + 2, kSnakeRows * kSnakeCellPx + 2, grid);
+  fillCanvasRect(_map_canvas_buf, 308, 138, bx, by,
+                 kSnakeCols * kSnakeCellPx, kSnakeRows * kSnakeCellPx, board);
+  for (int c = 0; c <= kSnakeCols; ++c) {
+    fillCanvasRect(_map_canvas_buf, 308, 138, bx + c * kSnakeCellPx, by, 1,
+                   kSnakeRows * kSnakeCellPx, grid);
+  }
+  for (int r = 0; r <= kSnakeRows; ++r) {
+    fillCanvasRect(_map_canvas_buf, 308, 138, bx, by + r * kSnakeCellPx,
+                   kSnakeCols * kSnakeCellPx, 1, grid);
+  }
+
+  const int fx = bx + (_snake_food % kSnakeCols) * kSnakeCellPx;
+  const int fy = by + (_snake_food / kSnakeCols) * kSnakeCellPx;
+  fillCanvasRect(_map_canvas_buf, 308, 138, fx + 2, fy + 2,
+                 kSnakeCellPx - 4, kSnakeCellPx - 4, food);
+
+  for (uint8_t i = 0; i < _snake_len; ++i) {
+    const int cx = bx + (_snake_cells[i] % kSnakeCols) * kSnakeCellPx;
+    const int cy = by + (_snake_cells[i] / kSnakeCols) * kSnakeCellPx;
+    fillCanvasRect(_map_canvas_buf, 308, 138, cx + 1, cy + 1,
+                   kSnakeCellPx - 2, kSnakeCellPx - 2, i == 0 ? head : body);
+  }
+
+  if (_snake_canvas) lv_obj_invalidate(_snake_canvas);
+}
+
+void App::updateSnakeHud() {
+  if (_snake_score_lbl) {
+    lv_label_set_text_fmt(_snake_score_lbl, "Score %u  Best %u",
+                          unsigned(_snake_score), unsigned(_snake_best));
+  }
+  if (_snake_pause_lbl) {
+    lv_label_set_text(_snake_pause_lbl, _snake_paused ? "Resume" : "Pause");
+  }
+  if (_snake_status_lbl) {
+    const char* text = "";
+    if (_snake_game_over) {
+      text = (_snake_len >= kSnakeMax) ? "YOU WIN!\nPress New" : "GAME OVER\nPress New";
+    } else if (_snake_paused) {
+      text = "PAUSED";
+    }
+    lv_label_set_text(_snake_status_lbl, text);
+    if (text[0]) lv_obj_remove_flag(_snake_status_lbl, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(_snake_status_lbl, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+void App::buildGameView(lv_obj_t* parent) {
+  const bool outdoor = _store.uiPrefs().outdoor_high_contrast;
+  const auto& p = Theme::palette(outdoor);
+  lv_obj_set_style_pad_row(parent, 3, 0);
+
+  lv_obj_t* hdr = lv_obj_create(parent);
+  lv_obj_set_size(hdr, 308, 16);
+  lv_obj_set_style_bg_opa(hdr, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(hdr, 0, 0);
+  lv_obj_set_style_pad_all(hdr, 0, 0);
+  lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_remove_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* title = lv_label_create(hdr);
+  lv_obj_set_style_text_font(title, &faro_font_14, 0);
+  lv_obj_set_style_text_color(title, p.accent, 0);
+  lv_label_set_text(title, "SNAKE");
+  _snake_score_lbl = lv_label_create(hdr);
+  lv_obj_set_style_text_font(_snake_score_lbl, &faro_font_mono_12, 0);
+  lv_obj_set_style_text_color(_snake_score_lbl, p.text_primary, 0);
+
+  lv_obj_t* canvas = lv_canvas_create(parent);
+  lv_obj_set_size(canvas, 308, 138);
+  lv_canvas_set_buffer(canvas, _map_canvas_buf, 308, 138, LV_COLOR_FORMAT_RGB565);
+  lv_obj_add_flag(canvas, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_remove_flag(canvas, LV_OBJ_FLAG_SCROLLABLE);
+  _snake_canvas = canvas;
+
+  _snake_status_lbl = lv_label_create(canvas);
+  lv_obj_set_style_text_font(_snake_status_lbl, &faro_font_14, 0);
+  lv_obj_set_style_text_color(_snake_status_lbl, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_text_align(_snake_status_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_bg_color(_snake_status_lbl, p.bg, 0);
+  lv_obj_set_style_bg_opa(_snake_status_lbl, LV_OPA_80, 0);
+  lv_obj_set_style_pad_all(_snake_status_lbl, 5, 0);
+  lv_obj_set_style_radius(_snake_status_lbl, 6, 0);
+  lv_obj_center(_snake_status_lbl);
+  lv_obj_add_flag(_snake_status_lbl, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_add_event_cb(canvas, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (!self) return;
+    lv_indev_t* indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t pt;
+    lv_indev_get_point(indev, &pt);
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED) {
+      self->_snake_drag_x = int16_t(pt.x);
+      self->_snake_drag_y = int16_t(pt.y);
+    } else if (code == LV_EVENT_RELEASED) {
+      const int16_t dx = int16_t(pt.x) - self->_snake_drag_x;
+      const int16_t dy = int16_t(pt.y) - self->_snake_drag_y;
+      if (abs(dx) < 10 && abs(dy) < 10) return;
+      if (abs(dx) > abs(dy)) {
+        self->snakeSetDirection(dx > 0 ? SnakeDir::Right : SnakeDir::Left);
+      } else {
+        self->snakeSetDirection(dy > 0 ? SnakeDir::Down : SnakeDir::Up);
+      }
+    } else if (code == LV_EVENT_CLICKED) {
+      if (self->_snake_game_over) {
+        self->snakeReset();
+      } else if (self->_snake_paused) {
+        self->_snake_paused = false;
+        self->_snake_last_step_ms = 0;
+        self->updateSnakeHud();
+      }
+    }
+  }, LV_EVENT_ALL, this);
+
+  lv_obj_t* row = lv_obj_create(parent);
+  lv_obj_set_size(row, 308, 26);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_set_style_pad_all(row, 0, 0);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* pause_btn = lv_button_create(row);
+  lv_obj_set_size(pause_btn, 96, 26);
+  Theme::styleTouchButton(pause_btn, p.surface_alt, p.text_primary);
+  _snake_pause_lbl = lv_label_create(pause_btn);
+  lv_obj_set_style_text_font(_snake_pause_lbl, &faro_font_12, 0);
+  lv_label_set_text(_snake_pause_lbl, "Pause");
+  lv_obj_center(_snake_pause_lbl);
+  lv_obj_add_event_cb(pause_btn, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (!self || self->_snake_game_over) return;
+    self->_snake_paused = !self->_snake_paused;
+    self->_snake_last_step_ms = 0;
+    self->updateSnakeHud();
+  }, LV_EVENT_CLICKED, this);
+
+  lv_obj_t* new_btn = lv_button_create(row);
+  lv_obj_set_size(new_btn, 96, 26);
+  Theme::styleTouchButton(new_btn, p.success, lv_color_hex(0xFFFFFF));
+  lv_obj_t* newl = lv_label_create(new_btn);
+  lv_obj_set_style_text_font(newl, &faro_font_12, 0);
+  lv_label_set_text(newl, "New");
+  lv_obj_center(newl);
+  lv_obj_add_event_cb(new_btn, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (self) self->snakeReset();
+  }, LV_EVENT_CLICKED, this);
+
+  lv_obj_t* exit_btn = lv_button_create(row);
+  lv_obj_set_size(exit_btn, 96, 26);
+  Theme::styleTouchButton(exit_btn, p.surface_alt, p.danger);
+  lv_obj_t* exitl = lv_label_create(exit_btn);
+  lv_obj_set_style_text_font(exitl, &faro_font_12, 0);
+  lv_label_set_text(exitl, "Exit");
+  lv_obj_center(exitl);
+  lv_obj_add_event_cb(exit_btn, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (self) self->showScreen(ScreenId::Home);
+  }, LV_EVENT_CLICKED, this);
+
+  lv_obj_t* hint = lv_label_create(parent);
+  lv_obj_set_style_text_font(hint, &faro_font_12, 0);
+  lv_obj_set_style_text_color(hint, p.text_secondary, 0);
+  lv_label_set_text(hint, "Swipe or W/A/S/D | Space pause | Esc exit");
+
+  if (_snake_len == 0) snakeReset();
+  else {
+    renderSnakeCanvas();
+    updateSnakeHud();
   }
 }
 
