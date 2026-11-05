@@ -75,6 +75,18 @@ int main() {
     }
   }
 
+  app.setDiagTab(5);  // About
+  memset(g_test_fb, 0, sizeof(g_test_fb));
+  app.showScreen(faro::ui::ScreenId::Diagnostics);
+  lv_tick_inc(25);
+  lv_timer_handler();
+  lv_refr_now(disp);
+  {
+    size_t non_zero = 0;
+    for (size_t px = 0; px < 320 * 240; ++px) if (g_test_fb[px] != 0) ++non_zero;
+    assert(non_zero > 1000);
+  }
+
   // Test DM send + simulated ACK via EventBus
   uint32_t crc = 0;
   faro::core::DeliveryState dstate = faro::core::DeliveryState::Queued;

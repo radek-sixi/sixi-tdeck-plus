@@ -664,6 +664,62 @@ uint32_t AppStore::appendMessage(const MessageRecord& msg) {
   return copy.id;
 }
 
+void AppStore::removeMessageAt(size_t logical_idx) {
+  if (logical_idx >= _msg_count) return;
+  // messageAt() starts at the oldest entry (head - count); shift the following messages one slot
+  // towards the hole. Source (k+1) is always read before destination (k) overwrites it.
+  const size_t base = (_msg_head + kMaxMessages - _msg_count) % kMaxMessages;
+  for (size_t k = logical_idx; k + 1 < _msg_count; ++k) {
+    const size_t dst = (base + k) % kMaxMessages;
+    const size_t src = (base + k + 1) % kMaxMessages;
+    _messages[dst] = _messages[src];
+  }
+  const size_t last = (base + _msg_count - 1) % kMaxMessages;
+  _messages[last] = MessageRecord{};
+  // The shifted ring is one entry shorter; move the "one past newest" pointer back too, so the
+  // oldest-entry base stays at `base`.
+  _msg_head = (_msg_head + kMaxMessages - 1) % kMaxMessages;
+  --_msg_count;
+  ++_version;
+}
+
+bool AppStore::removeMessage(uint32_t id) {
+  for (size_t i = _msg_count; i > 0; --i) {
+    if (messageAt(i - 1).id == id) {
+      removeMessageAt(i - 1);
+      return true;
+    }
+  }
+  return false;
+}
+
+size_t AppStore::clearMessagesForPeer(const uint8_t prefix6[6]) {
+  if (!prefix6) return 0;
+  size_t removed = 0;
+  for (size_t i = _msg_count; i > 0; --i) {
+    const size_t idx = i - 1;
+    const MessageRecord& m = messageAt(idx);
+    if (m.valid && !m.is_channel && memcmp(m.peer_prefix, prefix6, 6) == 0) {
+      removeMessageAt(idx);
+      ++removed;
+    }
+  }
+  return removed;
+}
+
+size_t AppStore::clearMessagesForChannel(uint8_t channel_index) {
+  size_t removed = 0;
+  for (size_t i = _msg_count; i > 0; --i) {
+    const size_t idx = i - 1;
+    const MessageRecord& m = messageAt(idx);
+    if (m.valid && m.is_channel && m.channel_index == channel_index) {
+      removeMessageAt(idx);
+      ++removed;
+    }
+  }
+  return removed;
+}
+
 bool AppStore::markAckReceived(uint32_t ack_crc) {
   if (ack_crc == 0) return false;
   bool matched = false;
@@ -1190,7 +1246,7 @@ namespace {
 constexpr uint32_t kUiMagic = 0x31495546U;    // "FUI1"
 constexpr uint32_t kMsgMagic = 0x31534D46U;   // "FMS1"
 constexpr uint32_t kComboMagic = 0x34524146U; // "FAR4"
-constexpr uint16_t kUiVersion = 1;
+constexpr uint16_t kUiVersion = 2;  // v2 adds cpu_profile; v1 files still load
 constexpr uint16_t kMsgVersion = 1;
 
 // Writes to a file, or only hashes (FNV-1a) when no file is given
@@ -1307,6 +1363,7 @@ struct AppStoreCodec {
     o.u8(up.deadman_mode);
     for (int i = 0; i < 3; ++i) o.str(up.custom_tags[i], sizeof(up.custom_tags[i]));
     o.str(up.away_msg, sizeof(up.away_msg));
+    o.u8(up.cpu_profile);
 
     uint8_t n_mute = 0;
     for (size_t i = 0; i < AppStore::kMaxChannels; ++i) {
@@ -1334,7 +1391,9 @@ struct AppStoreCodec {
   }
 
   static bool readUi(AppStore& s, In& in) {
-    if (in.u32() != kUiMagic || in.u16() != kUiVersion || !in.ok) return false;
+    if (in.u32() != kUiMagic || !in.ok) return false;
+    const uint16_t file_version = in.u16();
+    if (file_version < 1 || file_version > kUiVersion) return false;
     UiPrefs up = s._ui_prefs;
     const uint8_t region = in.u8();
     const uint8_t lang = in.u8();
@@ -1354,6 +1413,8 @@ struct AppStoreCodec {
     up.deadman_mode = uint8_t(in.u8() % 4);
     for (int i = 0; i < 3; ++i) in.str(up.custom_tags[i], sizeof(up.custom_tags[i]));
     in.str(up.away_msg, sizeof(up.away_msg));
+    if (file_version >= 2) up.cpu_profile = uint8_t(in.u8() % 4);
+    else up.cpu_profile = 0;
     if (!in.ok) return false;
     // The dead-man countdown restarts at boot; a restart never triggers it by itself
     static constexpr uint32_t kDeadmanSecs[4] = {1800, 900, 1800, 3600};

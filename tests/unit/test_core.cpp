@@ -248,6 +248,34 @@ void testAppStoreMessagingAndRetries() {
   assert(store.messageAt(2).delivery_state == DeliveryState::Failed);
   assert(!store.takeResendRequest(resend_id));
 
+  // Message deletion and per-thread clear keep the ring consistent
+  MessageRecord extra{};
+  memcpy(extra.peer_prefix, disc.pub_key, 6);
+  strncpy(extra.sender_name, "Me", sizeof(extra.sender_name) - 1);
+  strncpy(extra.text, "delete me", sizeof(extra.text) - 1);
+  extra.valid = true;
+  const uint32_t extra_id = store.appendMessage(extra);
+  assert(store.removeMessage(extra_id));
+  bool found_deleted = false;
+  for (size_t i = 0; i < store.messageCount(); ++i) {
+    if (store.messageAt(i).id == extra_id) found_deleted = true;
+  }
+  assert(!found_deleted);
+  assert(store.clearMessagesForPeer(disc.pub_key) >= 2);
+  for (size_t i = 0; i < store.messageCount(); ++i) {
+    const auto& m = store.messageAt(i);
+    assert(m.is_channel || memcmp(m.peer_prefix, disc.pub_key, 6) != 0);
+  }
+  MessageRecord chmsg{};
+  chmsg.is_channel = true;
+  chmsg.channel_index = 0;
+  strncpy(chmsg.sender_name, "Peer", sizeof(chmsg.sender_name) - 1);
+  strncpy(chmsg.text, "channel clear", sizeof(chmsg.text) - 1);
+  chmsg.valid = true;
+  store.appendMessage(chmsg);
+  assert(store.clearMessagesForChannel(0) == 1);
+  assert(store.messageCount() == 0);
+
   printf("[PASS] testAppStoreMessagingAndRetries\n");
 }
 
@@ -638,6 +666,7 @@ void testPersistence() {
   a.uiPrefs().language = Language::DE;
   a.uiPrefs().outdoor_high_contrast = false;
   a.uiPrefs().screen_timeout_secs = 300;
+  a.uiPrefs().cpu_profile = 3;
   a.uiPrefs().deadman_mode = 2;
   a.uiPrefs().deadman_triggered = true;
   a.setRegion(RadioRegionId::US915);
@@ -665,7 +694,8 @@ void testPersistence() {
   b.upsertContact(c);
   assert(b.loadUiState(ui_path));
   assert(b.uiPrefs().language == Language::DE && !b.uiPrefs().outdoor_high_contrast);
-  assert(b.uiPrefs().screen_timeout_secs == 300 && b.uiPrefs().deadman_mode == 2);
+  assert(b.uiPrefs().screen_timeout_secs == 300 && b.uiPrefs().cpu_profile == 3);
+  assert(b.uiPrefs().deadman_mode == 2);
   assert(!b.uiPrefs().deadman_triggered);  // a restart never fires the dead-man timer
   assert(b.region() == RadioRegionId::US915);
   const ContactRecord* bc = b.findContactByPubKey(c.pub_key);

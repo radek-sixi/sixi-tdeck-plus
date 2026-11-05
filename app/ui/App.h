@@ -141,6 +141,9 @@ private:
   bool     _home_subpage = false;     // Dedicated Quick Actions subpage (Lock, Theme, My QR, Lang)
   bool     _chats_subpage = false;    // Dedicated Chats Tools subpage (Search, +URI, Contacts)
   bool     _chat_thread_subpage = false; // Dedicated ChatThread Options subpage (Flood, TS, Info)
+  bool     _thread_search_active = false;
+  char     _thread_search_query[32] = {0};
+  uint32_t _thread_unread_id = 0;
   bool     _channels_subpage = false; // Dedicated Add Channel subpage (+#Tag, +AES)
   bool     _channel_thread_subpage = false; // Dedicated ChannelThread Options subpage (@Ment, Scope)
   bool     _discover_subpage = false; // Dedicated Discover Advert & Scan subpage

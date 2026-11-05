@@ -8,7 +8,7 @@ companion firmware. It runs on the device next to the normal companion interface
   Faro attaches through upstream's `platformio.local.ini` hook and the `AbstractUITask` listener; it adds no
   companion opcodes.
 - **Licence:** Apache-2.0 (see `LICENSE`, `NOTICE`, `LICENSES/`, `docs/THIRD_PARTY.md`).
-- **Status:** 0.10.8, pre-1.0. Release binaries are 0.10.8 (see `docs/FLASHING.md`). Test it on your own
+- **Status:** 0.11.0, pre-1.0. Release binaries are 0.11.0 (see `docs/FLASHING.md`). Test it on your own
   hardware before relying on it. 0.10.3 added Wi-Fi network scanning, I2S audio notifications, touch map
   drag/pan, emoji support, preset dropdowns, high-contrast textbox focus/cursor, and MicroSD backup fixes;
   0.10.4 fixed ESP32-S3 Wi-Fi scan driver parameters, BLE MITM pairing & bond recovery, screen idle
@@ -17,20 +17,22 @@ companion firmware. It runs on the device next to the normal companion interface
   kept modem sleep enabled for BLE+Wi-Fi coexistence, and made offline map PNG tiles decode from
   PSRAM with a 9-tile cache (cached pan ~8 ms instead of repeated failed decodes). 0.10.6 also removed
   the community lone-worker/dead-man timer. 0.10.7 added a **Reconnect** action when Wi-Fi is already
-  connected and a **Show/Hide** toggle for the password currently being typed. 0.10.8 adds a hidden
-  **Snake** easter egg: type `snake` while no text field is focused.
+  connected and a **Show/Hide** toggle for the password currently being typed. 0.10.8 added a hidden
+  **Snake** easter egg: type `snake` while no text field is focused. 0.11.0 adds message management
+  (delete/clear/search a thread and jump to the first unread), a configurable CPU profile (Auto /
+  240 / 160 / 80 MHz) and an About/Support tab with version, reset reason, heap and shortcuts.
 
 ## Download & install
 
-**Firmware:** the [`v0.10.8` release](https://github.com/radek-sixi/sixi-tdeck-plus/releases/tag/v0.10.8)
+**Firmware:** the [`v0.11.0` release](https://github.com/radek-sixi/sixi-tdeck-plus/releases/tag/v0.11.0)
 has one `.bin` per board, a desktop `.deb` and a firmware bundle. Verify with `sha256sum -c SHA256SUMS`.
 
 T-Deck / T-Deck Plus:
 
 | What | File | Flash at |
 |---|---|---|
-| Full image (first install / recovery) | [`faro-tdeck-0.10.8-merged.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.10.8/faro-tdeck-0.10.8-merged.bin) | `0x0` |
-| App only (update, keeps keys & contacts) | [`faro-tdeck-0.10.8-app.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.10.8/faro-tdeck-0.10.8-app.bin) | `0x10000` |
+| Full image (first install / recovery) | [`faro-tdeck-0.11.0-merged.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.0/faro-tdeck-0.11.0-merged.bin) | `0x0` |
+| App only (update, keeps keys & contacts) | [`faro-tdeck-0.11.0-app.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.0/faro-tdeck-0.11.0-app.bin) | `0x10000` |
 
 **Three ways to install:**
 

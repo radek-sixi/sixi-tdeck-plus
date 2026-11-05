@@ -16,6 +16,7 @@ struct UiPrefs {
   uint8_t  brightness_pct = 70;
   uint8_t  kb_backlight = 128;
   uint16_t screen_timeout_secs = 60;
+  uint8_t  cpu_profile = 0;          // 0=Auto (80 MHz while screen off), 1=240, 2=160, 3=80
   bool     quiet_mode = false;
   bool     repeat_roam = true;
   bool     first_boot_done = true;
@@ -108,6 +109,9 @@ public:
   size_t messageCount() const { return _msg_count; }
   const MessageRecord& messageAt(size_t logical_idx) const;
   uint32_t appendMessage(const MessageRecord& msg);
+  bool removeMessage(uint32_t id);
+  size_t clearMessagesForPeer(const uint8_t prefix6[6]);
+  size_t clearMessagesForChannel(uint8_t channel_index);
   bool markAckReceived(uint32_t ack_crc);
 
 
@@ -231,6 +235,7 @@ private:
   size_t _msg_head = 0;
   size_t _msg_count = 0;
   uint32_t _next_msg_id = 1;
+  void removeMessageAt(size_t logical_idx);
 
 
   static constexpr size_t kMaxResendRequests = 8;

@@ -217,6 +217,9 @@ public:
   bool screen_off = false;
 #endif
   uint32_t last_ms = 0;
+#if !defined(FARO_HEADLESS)
+  uint8_t applied_cpu_mhz = 0;
+#endif
 
   void begin(mesh::MainBoard* board, BaseSerialInterface* ifaces,
              DisplayDriver* disp, SensorManager* sens, NodePrefs* np) {
@@ -422,6 +425,23 @@ public:
 
 
 #if !defined(FARO_HEADLESS)
+  // Power profile is user-selectable: Auto drops to 80 MHz only after the panel is fully off,
+  // 240/160/80 lock the CPU regardless of screen state. LoRa/WiFi/BLE stay up.
+  void applyCpuPolicy(bool force = false) {
+    const uint8_t profile = store.uiPrefs().cpu_profile % 4;
+    uint8_t target = 240;
+    if (profile == 0) target = screen_off ? 80 : 240;
+    else if (profile == 1) target = 240;
+    else if (profile == 2) target = 160;
+    else target = 80;
+    if (force || target != applied_cpu_mhz) {
+      const bool ok = setCpuFrequencyMhz(target);
+      applied_cpu_mhz = target;
+      Serial.printf("[FARO] CPU %u MHz (profile %u, screen_off=%d)%s\n",
+                    unsigned(target), unsigned(profile), int(screen_off), ok ? "" : " failed");
+    }
+  }
+
   void wakeDisplay() {
     last_input_ms = millis();
     if ((dimmed || screen_off) && display) {
@@ -436,6 +456,7 @@ public:
         lv_obj_invalidate(lv_screen_active());
       }
     }
+    applyCpuPolicy();
   }
 #endif
 
@@ -529,6 +550,7 @@ public:
       screen_off = true;
     }
 
+    applyCpuPolicy();
     lv_timer_handler();
 #endif
 

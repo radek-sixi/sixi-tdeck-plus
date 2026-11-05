@@ -47,6 +47,8 @@ public:
     (void)ssids; (void)rssis; (void)max_networks;
     return 0;
   }
+  // Sixi: write a fresh 16-byte PSK to /faro/wifi_psk.bin and enable the guarded TCP transport.
+  virtual bool generateWifiPsk() { return false; }
   virtual bool setBlePin(uint32_t pin) = 0;
   virtual bool setRepeatEnabled(bool enabled) = 0;
   virtual bool setDefaultScope(const char* scope_name) = 0;

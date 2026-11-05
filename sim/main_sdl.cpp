@@ -180,8 +180,17 @@ int main(int argc, char** argv) {
     app.showScreen(faro::ui::ScreenId::Diagnostics);
     dumpNamed("diag_mesh");
 
+    app.setDiagTab(5);
+    app.showScreen(faro::ui::ScreenId::Diagnostics);
+    dumpNamed("about");
 
     // Radio region page, contact path tab, discover scan answers, trace result
+    app.setSettingsTab(0);
+    app.showScreen(faro::ui::ScreenId::Settings);
+    dumpNamed("settings_display");
+    app.setSettingsTab(4);
+    app.showScreen(faro::ui::ScreenId::Settings);
+    dumpNamed("settings_wifi");
     app.setSettingsTab(2);
     app.showScreen(faro::ui::ScreenId::Settings);
     dumpNamed("settings_radio");

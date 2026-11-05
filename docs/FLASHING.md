@@ -1,11 +1,11 @@
 # Flashing Faro
 
-Release files (GitHub release `v0.10.8`):
+Release files (GitHub release `v0.11.0`):
 
 | File | Flash at | Use |
 |---|---|---|
-| `faro-<board>-0.10.8-merged.bin` | `0x0` | First install or recovery: bootloader, partition table, `boot_app0`, app |
-| `faro-<board>-0.10.8-app.bin` | `0x10000` | Update of an existing Faro or MeshCore companion install; keeps identity, contacts, channels |
+| `faro-<board>-0.11.0-merged.bin` | `0x0` | First install or recovery: bootloader, partition table, `boot_app0`, app |
+| `faro-<board>-0.11.0-app.bin` | `0x10000` | Update of an existing Faro or MeshCore companion install; keeps identity, contacts, channels |
 | `SHA256SUMS` | — | Check first: `sha256sum -c SHA256SUMS` |
 
 `<board>` is `tdeck` (T-Deck and T-Deck Plus), `tdeck-max`, `thinknode-m9`, `tbeam-supreme` or `heltec-v3`.
@@ -20,8 +20,9 @@ dimming/sleep, graphical emoji glyphs and Settings tab navigation. 0.10.6 fixed 
 runtime, restored network scanning (Arduino fallback), kept the mandated modem sleep for BLE+Wi-Fi,
 decoded offline map PNG tiles from PSRAM with a 9-tile cache, and removed the community
 lone-worker/dead-man timer. 0.10.7 added a Reconnect action when Wi-Fi is already connected and a
-Show/Hide toggle for the password being typed. 0.10.8 adds a hidden Snake easter egg: type `snake`
-while no text field is focused.
+Show/Hide toggle for the password being typed. 0.10.8 added a hidden Snake easter egg: type `snake`
+while no text field is focused. 0.11.0 adds message management (delete/clear/search a thread and jump
+to the first unread), a configurable CPU profile and an About/Support tab.
 
 ## Web flasher (browser, no command line)
 
@@ -35,7 +36,7 @@ You can flash from Chrome or Edge without installing anything, using an
   host without it, so for URL-based flashing use the CORS-enabled copy on GitHub Pages:
 
   ```
-  https://radek-sixi.github.io/sixi-tdeck-plus/firmware/v0.10.8/faro-tdeck-0.10.8-merged.bin
+  https://radek-sixi.github.io/sixi-tdeck-plus/firmware/v0.11.0/faro-tdeck-0.11.0-merged.bin
   ```
 
   (same pattern for the other boards and the `-app.bin`; the Mesh America configurator catalog also lists Faro).
@@ -58,9 +59,9 @@ Switch the device off, connect USB-C, hold the trackball pressed, switch on, rel
 
 ```bash
 # first install
-esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x0 faro-tdeck-0.10.8-merged.bin
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x0 faro-tdeck-0.11.0-merged.bin
 # update, keeps data
-esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x10000 faro-tdeck-0.10.8-app.bin
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x10000 faro-tdeck-0.11.0-app.bin
 ```
 
 On Windows the port is `COMx`, on macOS `/dev/cu.usbmodem*`. If 921600 baud fails, use 460800.

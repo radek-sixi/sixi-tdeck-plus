@@ -11,6 +11,17 @@
 #include <string.h>
 #include <strings.h>
 
+#if defined(ARDUINO)
+#include <esp_system.h>
+#endif
+
+#ifndef FARO_VERSION
+#define FARO_VERSION "dev"
+#endif
+#ifndef FARO_PRODUCT_NAME
+#define FARO_PRODUCT_NAME "Faro"
+#endif
+
 namespace faro::ui {
 
 using namespace faro::core;
@@ -343,6 +354,26 @@ void App::begin() {
 }
 
 namespace {
+const char* resetReasonName() {
+#if defined(ARDUINO)
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:   return "power-on";
+    case ESP_RST_EXT:       return "external pin";
+    case ESP_RST_SW:        return "software";
+    case ESP_RST_PANIC:     return "panic";
+    case ESP_RST_INT_WDT:   return "interrupt WDT";
+    case ESP_RST_TASK_WDT:  return "task WDT";
+    case ESP_RST_WDT:       return "watchdog";
+    case ESP_RST_DEEPSLEEP: return "deep sleep";
+    case ESP_RST_BROWNOUT:  return "brownout";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "unknown";
+  }
+#else
+  return "n/a (host)";
+#endif
+}
+
 bool containsKeywordIgnoreCase(const char* haystack, const char* needle) {
   if (!haystack || !needle || !needle[0]) return false;
   size_t nlen = strlen(needle);
@@ -502,6 +533,9 @@ void App::showScreen(ScreenId id) {
   _channel_thread_subpage = false;
   _discover_subpage = false;
   _contacts_subpage = false;
+  _thread_search_active = false;
+  _thread_search_query[0] = '\0';
+  if (id != ScreenId::ChatThread && id != ScreenId::ChannelThread) _thread_unread_id = 0;
   // Clear draft text on screen switch so sensitive inputs (BLE PIN, WiFi pwd, etc.) never leak across screens
   _draft_text[0] = '\0';
   _draft_key = 0xFFFFFFFFU;
@@ -517,8 +551,23 @@ void App::showScreen(ScreenId id) {
 
 void App::openChatWithContact(size_t contact_idx) {
   _selected_contact_idx = contact_idx;
+  _thread_unread_id = 0;
   if (contact_idx < AppStore::kMaxContacts && _store.contacts()[contact_idx].valid) {
     const ContactRecord& c = _store.contacts()[contact_idx];
+    if (c.unread_count > 0) {
+      size_t matching = 0;
+      for (size_t i = 0; i < _store.messageCount(); ++i) {
+        const auto& m = _store.messageAt(i);
+        if (m.valid && !m.is_channel && memcmp(m.peer_prefix, c.pub_key, 6) == 0) ++matching;
+      }
+      const size_t skip = matching > c.unread_count ? matching - c.unread_count : 0;
+      size_t seen = 0;
+      for (size_t i = 0; i < _store.messageCount(); ++i) {
+        const auto& m = _store.messageAt(i);
+        if (!m.valid || m.is_channel || memcmp(m.peer_prefix, c.pub_key, 6) != 0) continue;
+        if (seen++ == skip) { _thread_unread_id = m.id; break; }
+      }
+    }
     _store.clearContactUnread(c.pub_key);
     // Battery / temperature of the peer when a direct path is known; never floods the mesh just
     // because a chat was opened
@@ -529,6 +578,22 @@ void App::openChatWithContact(size_t contact_idx) {
 
 void App::openChannelThread(uint8_t channel_index) {
   _selected_channel_idx = channel_index;
+  _thread_unread_id = 0;
+  const ChannelRecord* ch = _store.findChannel(channel_index);
+  if (ch && ch->unread_count > 0) {
+    size_t matching = 0;
+    for (size_t i = 0; i < _store.messageCount(); ++i) {
+      const auto& m = _store.messageAt(i);
+      if (m.valid && m.is_channel && m.channel_index == channel_index) ++matching;
+    }
+    const size_t skip = matching > ch->unread_count ? matching - ch->unread_count : 0;
+    size_t seen = 0;
+    for (size_t i = 0; i < _store.messageCount(); ++i) {
+      const auto& m = _store.messageAt(i);
+      if (!m.valid || !m.is_channel || m.channel_index != channel_index) continue;
+      if (seen++ == skip) { _thread_unread_id = m.id; break; }
+    }
+  }
   _store.clearChannelUnread(channel_index);
   showScreen(ScreenId::ChannelThread);
 }
@@ -594,11 +659,17 @@ void App::onKeyPress(uint8_t key) {
           _chats_subpage = false;
           renderBody();
         } else if (_current_screen == ScreenId::ChatThread) {
-          const auto& c = _store.contacts()[_selected_contact_idx];
-          uint32_t crc = 0;
-          DeliveryState st = DeliveryState::Queued;
-          _actions.sendDirectMessage(c.pub_key, txt, crc, st);
-          renderBody();
+          if (_thread_search_active) {
+            strncpy(_thread_search_query, txt, sizeof(_thread_search_query) - 1);
+            _thread_search_query[sizeof(_thread_search_query) - 1] = '\0';
+            renderBody();
+          } else {
+            const auto& c = _store.contacts()[_selected_contact_idx];
+            uint32_t crc = 0;
+            DeliveryState st = DeliveryState::Queued;
+            _actions.sendDirectMessage(c.pub_key, txt, crc, st);
+            renderBody();
+          }
         } else if (_current_screen == ScreenId::Channels && _channels_subpage) {
           _actions.addHashtagChannel(txt);
           _channels_subpage = false;
@@ -607,6 +678,9 @@ void App::onKeyPress(uint8_t key) {
           if (_channel_thread_subpage) {
             _actions.addHashtagChannel(txt);
             _channel_thread_subpage = false;
+          } else if (_thread_search_active) {
+            strncpy(_thread_search_query, txt, sizeof(_thread_search_query) - 1);
+            _thread_search_query[sizeof(_thread_search_query) - 1] = '\0';
           } else {
             _actions.sendChannelMessage(_selected_channel_idx, txt);
           }
@@ -782,11 +856,16 @@ void App::rebuildChrome() {
   _top_left_lbl = lv_label_create(_top_bar);
   lv_obj_set_style_text_font(_top_left_lbl, &faro_font_12, 0);
   lv_obj_set_style_text_color(_top_left_lbl, p.accent, 0);
+  lv_obj_set_size(_top_left_lbl, 148, 16);
+  lv_label_set_long_mode(_top_left_lbl, LV_LABEL_LONG_DOT);
   lv_obj_align(_top_left_lbl, LV_ALIGN_LEFT_MID, 0, 0);
 
   _top_right_lbl = lv_label_create(_top_bar);
   lv_obj_set_style_text_font(_top_right_lbl, &faro_font_12, 0);
   lv_obj_set_style_text_color(_top_right_lbl, p.text_primary, 0);
+  lv_obj_set_size(_top_right_lbl, 160, 16);
+  lv_label_set_long_mode(_top_right_lbl, LV_LABEL_LONG_DOT);
+  lv_obj_set_style_text_align(_top_right_lbl, LV_TEXT_ALIGN_RIGHT, 0);
   lv_obj_align(_top_right_lbl, LV_ALIGN_RIGHT_MID, 0, 0);
 
   bool hide_bottom_nav = (_current_screen == ScreenId::ChatThread ||
@@ -884,12 +963,10 @@ void App::updateStatusBar() {
   const auto& up = _store.uiPrefs();
   // Region, then the strongest repeater heard lately (shown only: MeshCore routes as always)
   char left_buf[96] = {0};
-  const char* home_prefix = (_current_screen != ScreenId::Home) ? "[Home] " : "";
   const char* dm_tag = "";
-  snprintf(left_buf, sizeof(left_buf), "%s%.8s%s%s|%.9s|%s%.6s",
-           home_prefix,
+  snprintf(left_buf, sizeof(left_buf), "%.7s%s%s|%.6s|%s%.4s",
            st.node_name,
-           up.bot_mode == 1 ? "[PING]" : (up.bot_mode == 2 ? "[AWAY]" : ""),
+           up.bot_mode == 1 ? "[P]" : (up.bot_mode == 2 ? "[A]" : ""),
            dm_tag,
            _store.regionInfo().code,
            rr.hasPreferred() ? "R:" : "",
@@ -2107,43 +2184,64 @@ void App::buildChatThreadView(lv_obj_t* parent) {
     lv_obj_remove_flag(ocard, LV_OBJ_FLAG_SCROLLABLE);
 
     struct CTOptCtx { App* app; int idx; };
-    static CTOptCtx s_ctctx[4];
-    const char* kCTLabels[4] = {
+    static CTOptCtx s_ctctx[6];
+    const char* kCTLabels[6] = {
       "Contact Details & QR",
       "Reset Path to Flood",
       _store.uiPrefs().show_timestamps ? "Timestamps: ON" : "Timestamps: OFF",
-      "Remote Admin / CLI"
+      "Remote Admin / CLI",
+      _thread_search_active ? "Exit search" : "Search text",
+      "Clear chat"
     };
-    static const uint32_t kCTCols[4] = {0x1A73E8, 0xE37400, 0x1E8E3E, 0x9334E6};
+    static const uint32_t kCTCols[6] = {0x1A73E8, 0xE37400, 0x1E8E3E, 0x9334E6, 0x007B83, 0xD93025};
 
-    for (int i = 0; i < 4; ++i) {
+    for (int i = 0; i < 6; ++i) {
       lv_obj_t* b = lv_button_create(ocard);
-      lv_obj_set_size(b, 294, 34);
-      lv_obj_set_pos(b, 0, i * 38);
+      lv_obj_set_size(b, 294, 24);
+      lv_obj_set_pos(b, 0, i * 26);
       Theme::styleTouchButton(b, lv_color_hex(kCTCols[i]), lv_color_hex(0xFFFFFF));
       s_ctctx[i] = {this, i};
       lv_obj_add_event_cb(b, [](lv_event_t* e) {
         auto* ctx = static_cast<CTOptCtx*>(lv_event_get_user_data(e));
         if (!ctx || !ctx->app) return;
         App* a = ctx->app;
-        a->_chat_thread_subpage = false;
         if (ctx->idx == 0) {
+          a->_chat_thread_subpage = false;
           a->_contact_detail_tab = 0;
           a->openContactDetail(a->_selected_contact_idx);
         } else if (ctx->idx == 1) {
+          a->_chat_thread_subpage = false;
           const auto& c = a->_store.contacts()[a->_selected_contact_idx];
           a->_actions.resetContactPath(c.pub_key);
           a->renderBody();
         } else if (ctx->idx == 2) {
+          a->_chat_thread_subpage = false;
           a->_store.uiPrefs().show_timestamps = !a->_store.uiPrefs().show_timestamps;
           a->renderBody();
         } else if (ctx->idx == 3) {
+          a->_chat_thread_subpage = false;
           a->_contact_detail_tab = 3;
           a->openContactDetail(a->_selected_contact_idx);
+        } else if (ctx->idx == 4) {
+          a->_chat_thread_subpage = false;
+          a->_thread_search_active = !a->_thread_search_active;
+          a->_thread_search_query[0] = '\0';
+          a->renderBody();
+        } else if (ctx->idx == 5) {
+          auto* btn = static_cast<lv_obj_t*>(lv_event_get_target(e));
+          if (!a->confirmTap(0x200 + int(a->_selected_contact_idx),
+                             "Tap Clear chat again to delete this conversation")) {
+            if (btn && lv_obj_get_child_count(btn) > 0) lv_label_set_text(lv_obj_get_child(btn, 0), "Tap again!");
+            return;
+          }
+          const auto& c = a->_store.contacts()[a->_selected_contact_idx];
+          a->_store.clearMessagesForPeer(c.pub_key);
+          a->_chat_thread_subpage = false;
+          a->renderBody();
         }
       }, LV_EVENT_CLICKED, &s_ctctx[i]);
       lv_obj_t* l = lv_label_create(b);
-      lv_obj_set_style_text_font(l, &faro_font_14, 0);
+      lv_obj_set_style_text_font(l, &faro_font_12, 0);
       lv_label_set_text(l, kCTLabels[i]);
       lv_obj_center(l);
     }
@@ -2306,10 +2404,17 @@ void App::buildChatThreadView(lv_obj_t* parent) {
     lv_obj_set_style_pad_row(msg_box, 3, 0);
 
     bool show_ts = _store.uiPrefs().show_timestamps;
+    lv_obj_t* target_bubble = nullptr;
+    size_t shown_msgs = 0;
     for (size_t i = 0; i < _store.messageCount(); ++i) {
       const auto& m = _store.messageAt(i);
       if (!m.valid || m.is_channel) continue;
       if (memcmp(m.peer_prefix, peer->pub_key, 6) != 0) continue;
+      if (_thread_search_active && _thread_search_query[0] &&
+          !containsKeywordIgnoreCase(m.text, _thread_search_query)) {
+        continue;
+      }
+      ++shown_msgs;
 
       char emoji_txt[180] = {0};
       formatEmojiText(m.text, emoji_txt, sizeof(emoji_txt));
@@ -2319,6 +2424,15 @@ void App::buildChatThreadView(lv_obj_t* parent) {
       lv_label_set_long_mode(bubble, LV_LABEL_LONG_WRAP);
       lv_obj_set_style_text_font(bubble, &faro_font_12, 0);
       lv_obj_set_style_text_color(bubble, m.outgoing ? p.accent : p.text_primary, 0);
+      lv_obj_add_flag(bubble, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_set_user_data(bubble, reinterpret_cast<void*>(uintptr_t(m.id)));
+      lv_obj_add_event_cb(bubble, [](lv_event_t* e) {
+        auto* self = static_cast<App*>(lv_event_get_user_data(e));
+        auto* obj = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        if (!self || !obj) return;
+        const uint32_t id = uint32_t(uintptr_t(lv_obj_get_user_data(obj)));
+        if (self->_store.removeMessage(id)) self->renderBody();
+      }, LV_EVENT_LONG_PRESSED, this);
       uint32_t hh = (m.timestamp / 3600U) % 24U;
       uint32_t mm = (m.timestamp / 60U) % 60U;
       if (m.outgoing) {
@@ -2338,8 +2452,17 @@ void App::buildChatThreadView(lv_obj_t* parent) {
           lv_label_set_text_fmt(bubble, "%s (%uh): %s", m.sender_name, unsigned(m.hops), emoji_txt);
         }
       }
+      if (!_thread_search_active && m.id == _thread_unread_id) target_bubble = bubble;
     }
-    lv_obj_scroll_to_y(msg_box, LV_COORD_MAX, LV_ANIM_OFF);
+    if (shown_msgs == 0 && _thread_search_active && _thread_search_query[0]) {
+      lv_obj_t* empty_lbl = lv_label_create(msg_box);
+      lv_obj_set_width(empty_lbl, 290);
+      lv_obj_set_style_text_font(empty_lbl, &faro_font_12, 0);
+      lv_obj_set_style_text_color(empty_lbl, p.text_secondary, 0);
+      lv_label_set_text(empty_lbl, "No matching messages");
+    }
+    if (target_bubble) lv_obj_scroll_to_view(target_bubble, LV_ANIM_OFF);
+    else lv_obj_scroll_to_y(msg_box, LV_COORD_MAX, LV_ANIM_OFF);
   }
 
   // Bottom compose bar: Textarea (150 char limit) + [:) / Can] + [Send] (34px tall)
@@ -2356,7 +2479,8 @@ void App::buildChatThreadView(lv_obj_t* parent) {
   lv_obj_set_size(_compose_ta, 166, 32);
   lv_textarea_set_one_line(_compose_ta, true);
   lv_textarea_set_max_length(_compose_ta, 150);
-  lv_textarea_set_placeholder_text(_compose_ta, "Message (max 150)...");
+  lv_textarea_set_placeholder_text(_compose_ta, _thread_search_active ? "Search this chat..." : "Message (max 150)...");
+  if (_thread_search_active) lv_textarea_set_text(_compose_ta, _thread_search_query);
   lv_obj_set_style_text_font(_compose_ta, &faro_font_12, 0);
 
   lv_obj_t* can_btn = lv_button_create(comp);
@@ -2365,12 +2489,17 @@ void App::buildChatThreadView(lv_obj_t* parent) {
                           _show_compose_helper ? lv_color_hex(0xFFFFFF) : p.text_primary);
   lv_obj_add_event_cb(can_btn, [](lv_event_t* e) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
-    self->_show_compose_helper = !self->_show_compose_helper;
+    if (self->_thread_search_active) {
+      self->_thread_search_active = false;
+      self->_thread_search_query[0] = '\0';
+    } else {
+      self->_show_compose_helper = !self->_show_compose_helper;
+    }
     self->renderBody();
   }, LV_EVENT_CLICKED, this);
   lv_obj_t* cl = lv_label_create(can_btn);
   lv_obj_set_style_text_font(cl, &faro_font_12, 0);
-  lv_label_set_text(cl, "\xF0\x9F\x98\x80 / Can");
+  lv_label_set_text(cl, _thread_search_active ? "Clear" : "\xF0\x9F\x98\x80 / Can");
   lv_obj_center(cl);
 
   lv_obj_t* send_btn = lv_button_create(comp);
@@ -2380,6 +2509,12 @@ void App::buildChatThreadView(lv_obj_t* parent) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
     if (!self || !self->_compose_ta) return;
     const char* cur = lv_textarea_get_text(self->_compose_ta);
+    if (self->_thread_search_active) {
+      strncpy(self->_thread_search_query, cur ? cur : "", sizeof(self->_thread_search_query) - 1);
+      self->_thread_search_query[sizeof(self->_thread_search_query) - 1] = '\0';
+      self->renderBody();
+      return;
+    }
     if (!cur || !cur[0]) return;  // empty box: nothing to send
     char txt[sizeof(self->_draft_text)] = {0};
     strncpy(txt, cur, sizeof(txt) - 1);
@@ -2392,7 +2527,7 @@ void App::buildChatThreadView(lv_obj_t* parent) {
   }, LV_EVENT_CLICKED, this);
   lv_obj_t* sl = lv_label_create(send_btn);
   lv_obj_set_style_text_font(sl, &faro_font_12, 0);
-  lv_label_set_text(sl, tr(StrId::BtnSend, lang));
+  lv_label_set_text(sl, _thread_search_active ? "Find" : tr(StrId::BtnSend, lang));
   lv_obj_center(sl);
 }
 
@@ -2688,16 +2823,45 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
       lv_obj_center(dell);
     }
 
-    char sec_hex[36] = {0};
-    if (ch) {
-      AppStore::bytesToHex(ch->secret, 8, sec_hex, sizeof(sec_hex));
-    }
-    lv_obj_t* key_info = lv_label_create(ocard);
-    lv_obj_set_pos(key_info, 2, 126);
-    lv_obj_set_style_text_font(key_info, &faro_font_mono_12, 0);
-    lv_obj_set_style_text_color(key_info, p.text_secondary, 0);
-    lv_label_set_text_fmt(key_info, "Slot #%u | %s | Key:%s..",
-                          unsigned(_selected_channel_idx), ch_name, sec_hex[0] ? sec_hex : "default");
+    lv_obj_t* find_btn = lv_button_create(ocard);
+    lv_obj_set_size(find_btn, 144, 24);
+    lv_obj_set_pos(find_btn, 0, 122);
+    Theme::styleTouchButton(find_btn, p.surface_alt, p.accent);
+    lv_obj_add_event_cb(find_btn, [](lv_event_t* e) {
+      auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      if (!self) return;
+      self->_channel_thread_subpage = false;
+      self->_thread_search_active = !self->_thread_search_active;
+      self->_thread_search_query[0] = '\0';
+      self->renderBody();
+    }, LV_EVENT_CLICKED, this);
+    lv_obj_t* findl = lv_label_create(find_btn);
+    lv_obj_set_style_text_font(findl, &faro_font_12, 0);
+    lv_label_set_text(findl, _thread_search_active ? "Exit search" : "Search text");
+    lv_obj_center(findl);
+
+    lv_obj_t* clr_btn = lv_button_create(ocard);
+    lv_obj_set_size(clr_btn, 144, 24);
+    lv_obj_set_pos(clr_btn, 150, 122);
+    Theme::styleTouchButton(clr_btn, p.danger, lv_color_hex(0xFFFFFF));
+    lv_obj_add_event_cb(clr_btn, [](lv_event_t* e) {
+      auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      auto* btn = static_cast<lv_obj_t*>(lv_event_get_target(e));
+      if (!self || !btn) return;
+      if (!self->confirmTap(0x300 + int(self->_selected_channel_idx),
+                            "Tap Clear chat again to delete this channel history")) {
+        if (lv_obj_get_child_count(btn) > 0) lv_label_set_text(lv_obj_get_child(btn, 0), "Tap again!");
+        return;
+      }
+      self->_store.clearMessagesForChannel(self->_selected_channel_idx);
+      self->_channel_thread_subpage = false;
+      self->renderBody();
+    }, LV_EVENT_CLICKED, this);
+    lv_obj_t* clrl = lv_label_create(clr_btn);
+    lv_obj_set_style_text_font(clrl, &faro_font_12, 0);
+    lv_label_set_text(clrl, "Clear chat");
+    lv_obj_center(clrl);
+
     return;
   }
 
@@ -2808,13 +2972,18 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
   size_t rep_slot = 0;
   size_t shown_msgs = 0;
 
+  lv_obj_t* target_bubble = nullptr;
   for (size_t i = 0; i < _store.messageCount(); ++i) {
     const auto& m = _store.messageAt(i);
     if (!m.valid || !m.is_channel || m.channel_index != _selected_channel_idx) continue;
+    if (_thread_search_active && _thread_search_query[0] &&
+        !containsKeywordIgnoreCase(m.text, _thread_search_query)) {
+      continue;
+    }
 
     bool is_mention = (my_name[0] != '\0' && strstr(m.text, my_name) != nullptr) ||
                       (strstr(m.text, "@[") != nullptr);
-    if (_store.uiPrefs().mention_only_filter && !is_mention) continue;
+    if (!_thread_search_active && _store.uiPrefs().mention_only_filter && !is_mention) continue;
 
     ++shown_msgs;
     char emoji_txt[180] = {0};
@@ -2825,13 +2994,21 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(lbl, &faro_font_12, 0);
     lv_obj_set_style_text_color(lbl, is_mention ? p.warning : (m.outgoing ? p.accent : p.text_primary), 0);
+    lv_obj_add_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(lbl, reinterpret_cast<void*>(uintptr_t(m.id)));
+    lv_obj_add_event_cb(lbl, [](lv_event_t* e) {
+      auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      auto* obj = static_cast<lv_obj_t*>(lv_event_get_target(e));
+      if (!self || !obj) return;
+      const uint32_t id = uint32_t(uintptr_t(lv_obj_get_user_data(obj)));
+      if (self->_store.removeMessage(id)) self->renderBody();
+    }, LV_EVENT_LONG_PRESSED, this);
     if (m.outgoing) {
       lv_label_set_text_fmt(lbl, "%s [Heard x%u]: %s", m.sender_name, unsigned(m.repeats_heard + 1), emoji_txt);
     } else {
       lv_label_set_text_fmt(lbl, "%s%u> %s: %s", is_mention ? "@! " : "", unsigned(m.hops), m.sender_name, emoji_txt);
       if (rep_slot < 32) {
         s_rep_ctx[rep_slot] = {this, m.sender_name};
-        lv_obj_add_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(lbl, [](lv_event_t* e) {
           auto* ctx = static_cast<ReplyCtx*>(lv_event_get_user_data(e));
           if (ctx && ctx->app && ctx->app->_compose_ta && ctx->sender && ctx->sender[0]) {
@@ -2843,6 +3020,7 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
         ++rep_slot;
       }
     }
+    if (!_thread_search_active && m.id == _thread_unread_id) target_bubble = lbl;
   }
   if (shown_msgs == 0) {
     lv_obj_t* empty_lbl = lv_label_create(msg_box);
@@ -2850,10 +3028,15 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
     lv_label_set_long_mode(empty_lbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(empty_lbl, &faro_font_12, 0);
     lv_obj_set_style_text_color(empty_lbl, p.text_secondary, 0);
-    lv_label_set_text_fmt(empty_lbl, "[%s] Active on LoRa (%.3f MHz). No messages received yet — type below to broadcast.",
-                          ch_name, double(_store.radio().freq_mhz));
+    if (_thread_search_active && _thread_search_query[0]) {
+      lv_label_set_text(empty_lbl, "No matching messages");
+    } else {
+      lv_label_set_text_fmt(empty_lbl, "[%s] Active on LoRa (%.3f MHz). No messages received yet — type below to broadcast.",
+                            ch_name, double(_store.radio().freq_mhz));
+    }
   }
-  lv_obj_scroll_to_y(msg_box, LV_COORD_MAX, LV_ANIM_OFF);
+  if (target_bubble) lv_obj_scroll_to_view(target_bubble, LV_ANIM_OFF);
+  else lv_obj_scroll_to_y(msg_box, LV_COORD_MAX, LV_ANIM_OFF);
   }
 
   lv_obj_t* comp = lv_obj_create(parent);
@@ -2868,7 +3051,8 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
   _compose_ta = lv_textarea_create(comp);
   lv_obj_set_size(_compose_ta, 166, 32);
   lv_textarea_set_one_line(_compose_ta, true);
-  lv_textarea_set_placeholder_text(_compose_ta, "Broadcast to channel...");
+  lv_textarea_set_placeholder_text(_compose_ta, _thread_search_active ? "Search this channel..." : "Broadcast to channel...");
+  if (_thread_search_active) lv_textarea_set_text(_compose_ta, _thread_search_query);
   lv_obj_set_style_text_font(_compose_ta, &faro_font_12, 0);
 
   lv_obj_t* can_btn = lv_button_create(comp);
@@ -2877,12 +3061,17 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
                           _show_compose_helper ? lv_color_hex(0xFFFFFF) : p.text_primary);
   lv_obj_add_event_cb(can_btn, [](lv_event_t* e) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
-    self->_show_compose_helper = !self->_show_compose_helper;
+    if (self->_thread_search_active) {
+      self->_thread_search_active = false;
+      self->_thread_search_query[0] = '\0';
+    } else {
+      self->_show_compose_helper = !self->_show_compose_helper;
+    }
     self->renderBody();
   }, LV_EVENT_CLICKED, this);
   lv_obj_t* cl = lv_label_create(can_btn);
   lv_obj_set_style_text_font(cl, &faro_font_12, 0);
-  lv_label_set_text(cl, "\xF0\x9F\x98\x80 / Can");
+  lv_label_set_text(cl, _thread_search_active ? "Clear" : "\xF0\x9F\x98\x80 / Can");
   lv_obj_center(cl);
 
   lv_obj_t* send_btn = lv_button_create(comp);
@@ -2892,6 +3081,12 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
     auto* self = static_cast<App*>(lv_event_get_user_data(e));
     if (!self || !self->_compose_ta) return;
     const char* cur = lv_textarea_get_text(self->_compose_ta);
+    if (self->_thread_search_active) {
+      strncpy(self->_thread_search_query, cur ? cur : "", sizeof(self->_thread_search_query) - 1);
+      self->_thread_search_query[sizeof(self->_thread_search_query) - 1] = '\0';
+      self->renderBody();
+      return;
+    }
     if (!cur || !cur[0]) return;  // empty box: nothing to send
     char txt[sizeof(self->_draft_text)] = {0};
     strncpy(txt, cur, sizeof(txt) - 1);
@@ -2901,7 +3096,7 @@ void App::buildChannelThreadView(lv_obj_t* parent) {
   }, LV_EVENT_CLICKED, this);
   lv_obj_t* sl = lv_label_create(send_btn);
   lv_obj_set_style_text_font(sl, &faro_font_12, 0);
-  lv_label_set_text(sl, tr(StrId::BtnSend, lang));
+  lv_label_set_text(sl, _thread_search_active ? "Find" : tr(StrId::BtnSend, lang));
   lv_obj_center(sl);
 }
 
@@ -4284,8 +4479,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     };
     for (int i = 0; i < 4; ++i) {
       lv_obj_t* lb = lv_button_create(lcard);
-      lv_obj_set_size(lb, 144, 38);
-      lv_obj_set_pos(lb, (i % 2) * 150, 22 + (i / 2) * 44);
+      lv_obj_set_size(lb, 144, 30);
+      lv_obj_set_pos(lb, (i % 2) * 150, 20 + (i / 2) * 36);
       bool sel = (lang == kLangs[i]);
       Theme::styleTouchButton(lb, sel ? p.accent : p.surface_alt,
                               sel ? lv_color_hex(0xFFFFFF) : p.text_primary);
@@ -4306,8 +4501,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
 
     // Bottom row: [Theme: Light / Dark (94x38)] + [Dim: 60s/5m/OFF (94x38)] + [Lock Screen (94x38)]
     lv_obj_t* th_btn = lv_button_create(lcard);
-    lv_obj_set_size(th_btn, 94, 38);
-    lv_obj_set_pos(th_btn, 0, 114);
+    lv_obj_set_size(th_btn, 94, 30);
+    lv_obj_set_pos(th_btn, 0, 92);
     Theme::styleTouchButton(th_btn, p.success, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(th_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -4321,8 +4516,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_center(tl);
 
     lv_obj_t* dim_btn = lv_button_create(lcard);
-    lv_obj_set_size(dim_btn, 94, 38);
-    lv_obj_set_pos(dim_btn, 100, 114);
+    lv_obj_set_size(dim_btn, 94, 30);
+    lv_obj_set_pos(dim_btn, 100, 92);
     Theme::styleTouchButton(dim_btn, p.surface_alt, p.accent);
     lv_obj_add_event_cb(dim_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -4342,8 +4537,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_center(diml);
 
     lv_obj_t* lck_btn = lv_button_create(lcard);
-    lv_obj_set_size(lck_btn, 94, 38);
-    lv_obj_set_pos(lck_btn, 200, 114);
+    lv_obj_set_size(lck_btn, 94, 30);
+    lv_obj_set_pos(lck_btn, 200, 92);
     Theme::styleTouchButton(lck_btn, p.warning, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(lck_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -4354,6 +4549,27 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_set_style_text_font(lckl, &faro_font_12, 0);
     lv_label_set_text(lckl, "Lock Screen");
     lv_obj_center(lckl);
+
+    lv_obj_t* cpu_btn = lv_button_create(lcard);
+    lv_obj_set_size(cpu_btn, 296, 28);
+    lv_obj_set_pos(cpu_btn, 0, 126);
+    Theme::styleTouchButton(cpu_btn, p.surface_alt, p.accent);
+    lv_obj_add_event_cb(cpu_btn, [](lv_event_t* e) {
+      auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      self->_store.uiPrefs().cpu_profile = uint8_t((self->_store.uiPrefs().cpu_profile + 1) % 4);
+      self->_store.bumpVersion();
+      self->renderBody();
+    }, LV_EVENT_CLICKED, this);
+    lv_obj_t* cpul = lv_label_create(cpu_btn);
+    lv_obj_set_style_text_font(cpul, &faro_font_12, 0);
+    static const char* kCpuLabels[4] = {
+      "CPU: Auto (80 MHz when screen off)",
+      "CPU: 240 MHz (performance)",
+      "CPU: 160 MHz (balanced)",
+      "CPU: 80 MHz (battery)"
+    };
+    lv_label_set_text(cpul, kCpuLabels[_store.uiPrefs().cpu_profile % 4]);
+    lv_obj_center(cpul);
     return;
   }
 
@@ -4849,17 +5065,20 @@ void App::buildSettingsView(lv_obj_t* parent) {
 
     lv_obj_t* wlbl = lv_label_create(wcard);
     lv_obj_set_pos(wlbl, 0, 0);
+    lv_obj_set_width(wlbl, 230);
+    lv_label_set_long_mode(wlbl, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(wlbl, &faro_font_mono_12, 0);
     lv_obj_set_style_text_color(wlbl, st.wifi_connected ? p.success : p.text_primary, 0);
     lv_label_set_text_fmt(wlbl,
                           "WiFi:%s %s (%s)\n"
-                          "Auth:%s | %.16s | %s",
+                          "A:%s %.10s %s",
                           st.wifi_enabled ? "ON" : "OFF",
                           st.wifi_connected ? "CONNECTED" : "DISCONN",
                           st.wifi_connected ? st.wifi_ip : "DHCP",
                           st.wifi_auth_enabled ? "PSK" : "OPEN",
                           st.wifi_ssid[0] ? st.wifi_ssid : "(not set)",
                           st.wifi_pwd[0] ? "Pwd:set" : "Pwd:none");
+
 
     // Scanned Wi-Fi Networks Dropdown + [Scan WiFi] button (y = 32)
     char w_opts[384] = {0};
@@ -5096,6 +5315,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_set_style_text_font(clrl, &faro_font_12, 0);
     lv_label_set_text(clrl, "Forget Network");
     lv_obj_center(clrl);
+
     return;
   }
 
@@ -5524,11 +5744,11 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
   lv_label_set_text(bl, "<");
   lv_obj_center(bl);
 
-  static const char* kDTabs[5] = {"Stats", "RX log", "Graph", "RF", "Mesh"};
+  static const char* kDTabs[6] = {"Stats", "RX", "Graph", "RF", "Mesh", "Info"};
   struct DTabCtx { App* app; uint8_t t; };
-  static DTabCtx s_dtctx[5];
-  const uint8_t num_tabs = 5;
-  auto tabWidth = [](uint8_t) { return 52; };
+  static DTabCtx s_dtctx[6];
+  const uint8_t num_tabs = 6;
+  auto tabWidth = [](uint8_t) { return 48; };
   for (uint8_t t = 0; t < num_tabs; ++t) {
     lv_obj_t* tb = lv_button_create(dbar);
     lv_obj_set_size(tb, tabWidth(t), 26);
@@ -5908,6 +6128,49 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
     lv_obj_set_style_text_font(gpl, &faro_font_12, 0);
     lv_label_set_text(gpl, "Export GPX");
     lv_obj_center(gpl);
+    return;
+  }
+
+  constexpr uint8_t kAboutTab = 5;
+  if (_diag_tab == kAboutTab) {
+    lv_obj_t* acard = lv_obj_create(parent);
+    lv_obj_set_size(acard, 308, 138);
+    Theme::styleCard(acard, outdoor);
+    lv_obj_set_style_pad_all(acard, 4, 0);
+    lv_obj_remove_flag(acard, LV_OBJ_FLAG_SCROLLABLE);
+
+    char build[48] = {0};
+    snprintf(build, sizeof(build), "%s %s", __DATE__, __TIME__);
+    lv_obj_t* al = lv_label_create(acard);
+    lv_obj_set_pos(al, 0, 0);
+    lv_obj_set_width(al, 298);
+    lv_label_set_long_mode(al, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(al, &faro_font_mono_12, 0);
+    lv_obj_set_style_text_color(al, p.text_primary, 0);
+    lv_label_set_text_fmt(al,
+                          "Faro %s | Reset:%s\n"
+                          "Build: %s\n"
+                          "Heap:%uK PSRAM:%uK Up:%lus\n"
+                          "SD:%s %u/%uMB\n"
+                          "WiFi:%s %s\n"
+                          "BLE PIN:%06u | C:%zu M:%zu\n"
+                          "Loop:%u/%ums",
+                          FARO_VERSION, resetReasonName(), build,
+                          unsigned(st.free_heap / 1024), unsigned(st.free_psram / 1024),
+                          (unsigned long)(st.uptime_secs),
+                          st.sd_mounted ? "OK" : "---", unsigned(st.sd_used_mb),
+                          unsigned(st.sd_total_mb),
+                          st.wifi_connected ? "connected" : (st.wifi_enabled ? "offline" : "off"),
+                          st.wifi_connected ? st.wifi_ip : "",
+                          unsigned(st.ble_pin), _store.contactCount(), _store.messageCount(),
+                          unsigned(st.last_loop_ms), unsigned(st.max_loop_ms));
+
+    lv_obj_t* hint = lv_label_create(acard);
+    lv_obj_set_pos(hint, 0, 108);
+    lv_obj_set_width(hint, 298);
+    lv_obj_set_style_text_font(hint, &faro_font_12, 0);
+    lv_obj_set_style_text_color(hint, p.text_secondary, 0);
+    lv_label_set_text(hint, "Space=Map | Esc=Home | long-press msg=del\ntype \"snake\" for a game");
     return;
   }
 
