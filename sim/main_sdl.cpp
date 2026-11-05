@@ -184,6 +184,15 @@ int main(int argc, char** argv) {
     app.showScreen(faro::ui::ScreenId::Diagnostics);
     dumpNamed("about");
 
+    // 2048 easter egg: fresh game plus a few keyboard moves so the screenshots show merged tiles
+    app.showScreen(faro::ui::ScreenId::Game2048);
+    dumpNamed("17_2048_start");
+    app.onKeyPress('w');
+    app.onKeyPress('d');
+    app.onKeyPress('s');
+    app.onKeyPress('a');
+    dumpNamed("17_2048_play");
+
     // Radio region page, contact path tab, discover scan answers, trace result
     app.setSettingsTab(0);
     app.showScreen(faro::ui::ScreenId::Settings);

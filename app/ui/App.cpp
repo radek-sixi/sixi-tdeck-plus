@@ -336,6 +336,7 @@ const char* App::screenSlug(ScreenId id) {
     case ScreenId::Diagnostics:   return "14_diagnostics";
     case ScreenId::BootWizard:    return "15_boot_wizard";
     case ScreenId::Game:          return "16_snake";
+    case ScreenId::Game2048:      return "17_2048";
     default:                      return "unknown";
   }
 }
@@ -723,6 +724,18 @@ void App::onKeyPress(uint8_t key) {
     }
   }
 
+  // 2048 controls when the 2048 screen is open.
+  if (_current_screen == ScreenId::Game2048) {
+    const uint8_t k = (key >= 'A' && key <= 'Z') ? uint8_t(key + 32) : key;
+    if (k == 'w') { move2048(0); return; }
+    if (k == 's') { move2048(1); return; }
+    if (k == 'a') { move2048(2); return; }
+    if (k == 'd') { move2048(3); return; }
+    if (k == 'n') { new2048(); return; }
+    if (k == 'q') { showScreen(ScreenId::Home); return; }
+    return;
+  }
+
   // Snake controls when the Easter egg screen is open.
   if (_current_screen == ScreenId::Game) {
     const uint8_t k = (key >= 'A' && key <= 'Z') ? uint8_t(key + 32) : key;
@@ -743,19 +756,26 @@ void App::onKeyPress(uint8_t key) {
     return;
   }
 
-  // Easter egg: type "snake" while no text field is focused.
+  // Easter eggs: type "snake" or "2048" while no text field is focused.
   {
     static char secret[5] = {0};
     static uint8_t secret_len = 0;
     const uint8_t k = (key >= 'A' && key <= 'Z') ? uint8_t(key + 32) : key;
-    if (k >= 'a' && k <= 'z') {
+    const bool is_code_char = (k >= 'a' && k <= 'z') || (k >= '0' && k <= '9');
+    if (is_code_char) {
       if (secret_len >= sizeof(secret)) {
         memmove(secret, secret + 1, sizeof(secret) - 1);
         secret[sizeof(secret) - 1] = char(k);
       } else {
         secret[secret_len++] = char(k);
       }
-      if (secret_len == sizeof(secret) && memcmp(secret, "snake", sizeof(secret)) == 0) {
+      if (secret_len == 4 && memcmp(secret, "2048", 4) == 0) {
+        secret_len = 0;
+        new2048();
+        showScreen(ScreenId::Game2048);
+        return;
+      }
+      if (secret_len == 5 && memcmp(secret, "snake", 5) == 0) {
         secret_len = 0;
         _snake_len = 0;  // always start a fresh run from the Easter egg
         snakeReset();
@@ -872,6 +892,7 @@ void App::rebuildChrome() {
                           _current_screen == ScreenId::ChannelThread ||
                           _current_screen == ScreenId::BootWizard ||
                           _current_screen == ScreenId::Game ||
+                          _current_screen == ScreenId::Game2048 ||
                           _screen_locked ||
                           (_current_screen == ScreenId::Settings && !_settings_hub));
 
@@ -1040,6 +1061,9 @@ void App::renderBody() {
   _snake_score_lbl = nullptr;
   _snake_status_lbl = nullptr;
   _snake_pause_lbl = nullptr;
+  _2048_score_lbl = nullptr;
+  _2048_status_lbl = nullptr;
+  for (size_t i = 0; i < 16; ++i) _2048_tiles[i] = nullptr;
 
   switch (_current_screen) {
     case ScreenId::Home:          buildHomeView(_body); break;
@@ -1056,6 +1080,7 @@ void App::renderBody() {
     case ScreenId::Diagnostics:   buildDiagnosticsView(_body); break;
     case ScreenId::BootWizard:    buildBootWizardView(_body); break;
     case ScreenId::Game:          buildGameView(_body); break;
+    case ScreenId::Game2048:      buildGame2048View(_body); break;
     default:                      buildHomeView(_body); break;
   }
 
@@ -1101,6 +1126,11 @@ void App::renderBody() {
         lv_group_focus_obj(ta);
       }
     }, LV_EVENT_CLICKED, this);
+  }
+
+  if (_show_wifi_ap_modal && _current_screen == ScreenId::Settings && _settings_tab == 4 &&
+      !_settings_hub && _store.status().wifi_ap_active) {
+    buildWifiApModal();
   }
 }
 
@@ -1408,6 +1438,321 @@ void App::buildGameView(lv_obj_t* parent) {
     renderSnakeCanvas();
     updateSnakeHud();
   }
+}
+
+void App::new2048() {
+  for (size_t i = 0; i < 16; ++i) _2048_grid[i] = 0;
+  _2048_score = 0;
+  _2048_over = false;
+  _2048_won = false;
+  spawn2048();
+  spawn2048();
+  update2048();
+}
+
+void App::spawn2048() {
+  uint8_t empty[16];
+  size_t n = 0;
+  for (size_t i = 0; i < 16; ++i) {
+    if (_2048_grid[i] == 0) empty[n++] = uint8_t(i);
+  }
+  if (n == 0) return;
+  uint8_t rnd[2] = {0};
+  core::fillRandom(rnd, sizeof(rnd));
+  const size_t idx = empty[rnd[0] % n];
+  _2048_grid[idx] = (rnd[1] % 10 == 0) ? 4 : 2;
+}
+
+void App::move2048(int dir) {
+  if (_2048_over) return;
+  bool moved = false;
+  for (int i = 0; i < 4; ++i) {
+    int line[4] = {0};
+    for (int j = 0; j < 4; ++j) {
+      if (dir == 0) line[j] = _2048_grid[j * 4 + i];
+      else if (dir == 1) line[j] = _2048_grid[(3 - j) * 4 + i];
+      else if (dir == 2) line[j] = _2048_grid[i * 4 + j];
+      else line[j] = _2048_grid[i * 4 + (3 - j)];
+    }
+    int packed[4] = {0};
+    int o = 0;
+    for (int j = 0; j < 4; ++j) if (line[j]) packed[o++] = line[j];
+    int merged[4] = {0};
+    int m = 0;
+    int j = 0;
+    while (j < 4) {
+      if (j + 1 < 4 && packed[j] && packed[j] == packed[j + 1]) {
+        merged[m] = packed[j] * 2;
+        _2048_score = uint16_t(_2048_score + uint16_t(merged[m]));
+        ++m;
+        j += 2;
+      } else {
+        merged[m++] = packed[j++];
+      }
+    }
+    for (int j = 0; j < 4; ++j) {
+      uint16_t* cell = nullptr;
+      if (dir == 0) cell = &_2048_grid[j * 4 + i];
+      else if (dir == 1) cell = &_2048_grid[(3 - j) * 4 + i];
+      else if (dir == 2) cell = &_2048_grid[i * 4 + j];
+      else cell = &_2048_grid[i * 4 + (3 - j)];
+      if (*cell != uint16_t(merged[j])) moved = true;
+      *cell = uint16_t(merged[j]);
+    }
+  }
+  if (moved) {
+    if (_2048_score > _2048_best) _2048_best = _2048_score;
+    bool full = true;
+    bool can_move = false;
+    bool reached = false;
+    for (size_t i = 0; i < 16; ++i) {
+      if (_2048_grid[i] == 0) full = false;
+      if (_2048_grid[i] >= 2048) reached = true;
+    }
+    for (int r = 0; r < 4 && !can_move; ++r) {
+      for (int c = 0; c < 4 && !can_move; ++c) {
+        const uint16_t v = _2048_grid[r * 4 + c];
+        if (v == 0) continue;
+        if (c + 1 < 4 && _2048_grid[r * 4 + c + 1] == v) can_move = true;
+        if (r + 1 < 4 && _2048_grid[(r + 1) * 4 + c] == v) can_move = true;
+      }
+    }
+    if (reached) {
+      _2048_won = true;
+      _2048_over = true;
+    } else if (full && !can_move) {
+      _2048_over = true;
+    }
+    spawn2048();
+  }
+  update2048();
+}
+
+void App::update2048() {
+  if (_2048_score_lbl) {
+    lv_label_set_text_fmt(_2048_score_lbl, "Score %u  Best %u",
+                          unsigned(_2048_score), unsigned(_2048_best));
+  }
+  if (_2048_status_lbl) {
+    const char* text = _2048_over ? (_2048_won ? "YOU WIN!" : "GAME OVER") : "";
+    lv_label_set_text(_2048_status_lbl, text);
+    if (text[0]) lv_obj_remove_flag(_2048_status_lbl, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(_2048_status_lbl, LV_OBJ_FLAG_HIDDEN);
+  }
+  static const uint32_t kColors[13] = {
+    0x161B22, 0xEEE4DA, 0xEDE0C8, 0xF2B179, 0xF59563, 0xF67C5F, 0xF65E3B,
+    0xEDCF72, 0xEDCC61, 0xEDC850, 0xEDC53F, 0xEDC22E, 0x3C3A32};
+  static const uint16_t kValues[12] = {0, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048};
+  for (size_t i = 0; i < 16; ++i) {
+    if (!_2048_tiles[i]) continue;
+    const uint16_t v = _2048_grid[i];
+    size_t ci = 12;
+    for (size_t k = 0; k < 12; ++k) {
+      if (v == kValues[k]) { ci = k; break; }
+    }
+    lv_obj_set_style_bg_color(_2048_tiles[i], lv_color_hex(kColors[ci]), 0);
+    if (lv_obj_get_child_count(_2048_tiles[i]) > 0) {
+      lv_obj_t* lbl = lv_obj_get_child(_2048_tiles[i], 0);
+      if (v == 0) {
+        lv_label_set_text(lbl, "");
+      } else {
+        lv_label_set_text_fmt(lbl, "%u", unsigned(v));
+        lv_obj_set_style_text_color(lbl, lv_color_hex(v <= 4 ? 0x776E65U : 0xFFFFFFU), 0);
+      }
+    }
+  }
+}
+
+void App::buildGame2048View(lv_obj_t* parent) {
+  const bool outdoor = _store.uiPrefs().outdoor_high_contrast;
+  const auto& p = Theme::palette(outdoor);
+  lv_obj_set_style_pad_row(parent, 3, 0);
+
+  lv_obj_t* hdr = lv_obj_create(parent);
+  lv_obj_set_size(hdr, 308, 16);
+  lv_obj_set_style_bg_opa(hdr, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(hdr, 0, 0);
+  lv_obj_set_style_pad_all(hdr, 0, 0);
+  lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_remove_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* title = lv_label_create(hdr);
+  lv_obj_set_style_text_font(title, &faro_font_14, 0);
+  lv_obj_set_style_text_color(title, p.accent, 0);
+  lv_label_set_text(title, "2048");
+  _2048_score_lbl = lv_label_create(hdr);
+  lv_obj_set_style_text_font(_2048_score_lbl, &faro_font_mono_12, 0);
+  lv_obj_set_style_text_color(_2048_score_lbl, p.text_primary, 0);
+
+  lv_obj_t* board = lv_obj_create(parent);
+  lv_obj_set_size(board, 145, 145);
+  lv_obj_set_style_bg_color(board, p.surface_alt, 0);
+  lv_obj_set_style_bg_opa(board, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(board, p.border, 0);
+  lv_obj_set_style_border_width(board, 1, 0);
+  lv_obj_set_style_pad_all(board, 0, 0);
+  lv_obj_remove_flag(board, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(board, LV_OBJ_FLAG_CLICKABLE);
+
+  for (int r = 0; r < 4; ++r) {
+    for (int c = 0; c < 4; ++c) {
+      lv_obj_t* tile = lv_obj_create(board);
+      lv_obj_set_size(tile, 34, 34);
+      lv_obj_set_pos(tile, c * 37, r * 37);
+      lv_obj_set_style_radius(tile, 4, 0);
+      lv_obj_set_style_bg_color(tile, p.surface, 0);
+      lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
+      lv_obj_remove_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_clear_flag(tile, LV_OBJ_FLAG_CLICKABLE);
+      lv_obj_t* tl = lv_label_create(tile);
+      lv_obj_set_style_text_font(tl, &faro_font_mono_12, 0);
+      lv_obj_set_style_text_color(tl, lv_color_hex(0xFFFFFF), 0);
+      lv_obj_center(tl);
+      _2048_tiles[r * 4 + c] = tile;
+    }
+  }
+
+  _2048_status_lbl = lv_label_create(board);
+  lv_obj_set_style_text_font(_2048_status_lbl, &faro_font_14, 0);
+  lv_obj_set_style_text_color(_2048_status_lbl, lv_color_hex(0xFFFFFF), 0);
+  lv_obj_set_style_text_align(_2048_status_lbl, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_bg_color(_2048_status_lbl, p.bg, 0);
+  lv_obj_set_style_bg_opa(_2048_status_lbl, LV_OPA_80, 0);
+  lv_obj_set_style_pad_all(_2048_status_lbl, 5, 0);
+  lv_obj_set_style_radius(_2048_status_lbl, 6, 0);
+  lv_obj_center(_2048_status_lbl);
+  lv_obj_add_flag(_2048_status_lbl, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_add_event_cb(board, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (!self) return;
+    lv_indev_t* indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t pt;
+    lv_indev_get_point(indev, &pt);
+    const lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED) {
+      self->_2048_drag_x = int16_t(pt.x);
+      self->_2048_drag_y = int16_t(pt.y);
+    } else if (code == LV_EVENT_RELEASED) {
+      const int16_t dx = int16_t(pt.x) - self->_2048_drag_x;
+      const int16_t dy = int16_t(pt.y) - self->_2048_drag_y;
+      if (abs(dx) < 10 && abs(dy) < 10) return;
+      if (abs(dx) > abs(dy)) self->move2048(dx > 0 ? 3 : 2);
+      else self->move2048(dy > 0 ? 1 : 0);
+    } else if (code == LV_EVENT_CLICKED) {
+      if (self->_2048_over) self->new2048();
+    }
+  }, LV_EVENT_ALL, this);
+
+  lv_obj_t* row = lv_obj_create(parent);
+  lv_obj_set_size(row, 308, 24);
+  lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(row, 0, 0);
+  lv_obj_set_style_pad_all(row, 0, 0);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_remove_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* new_btn = lv_button_create(row);
+  lv_obj_set_size(new_btn, 140, 24);
+  Theme::styleTouchButton(new_btn, p.success, lv_color_hex(0xFFFFFF));
+  lv_obj_t* newl = lv_label_create(new_btn);
+  lv_obj_set_style_text_font(newl, &faro_font_12, 0);
+  lv_label_set_text(newl, "New");
+  lv_obj_center(newl);
+  lv_obj_add_event_cb(new_btn, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (self) self->new2048();
+  }, LV_EVENT_CLICKED, this);
+
+  lv_obj_t* exit_btn = lv_button_create(row);
+  lv_obj_set_size(exit_btn, 140, 24);
+  Theme::styleTouchButton(exit_btn, p.surface_alt, p.danger);
+  lv_obj_t* exitl = lv_label_create(exit_btn);
+  lv_obj_set_style_text_font(exitl, &faro_font_12, 0);
+  lv_label_set_text(exitl, "Exit");
+  lv_obj_center(exitl);
+  lv_obj_add_event_cb(exit_btn, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (self) self->showScreen(ScreenId::Home);
+  }, LV_EVENT_CLICKED, this);
+
+  lv_obj_t* hint = lv_label_create(parent);
+  lv_obj_set_style_text_font(hint, &faro_font_12, 0);
+  lv_obj_set_style_text_color(hint, p.text_secondary, 0);
+  lv_label_set_text(hint, "Swipe or W/A/S/D | N new | Q exit");
+
+  if (_2048_grid[0] == 0 && _2048_grid[15] == 0) new2048();
+  else update2048();
+}
+
+void App::buildWifiApModal() {
+  const bool outdoor = _store.uiPrefs().outdoor_high_contrast;
+  const auto& p = Theme::palette(outdoor);
+  const auto& st = _store.status();
+  if (!st.wifi_ap_active) return;
+
+  lv_obj_t* m = lv_obj_create(_body);
+  lv_obj_set_size(m, 264, 148);
+  lv_obj_align(m, LV_ALIGN_CENTER, 0, 0);
+  lv_obj_move_foreground(m);
+  Theme::styleCard(m, outdoor);
+  lv_obj_set_style_pad_all(m, 6, 0);
+  lv_obj_remove_flag(m, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* title = lv_label_create(m);
+  lv_obj_set_pos(title, 0, 0);
+  lv_obj_set_style_text_font(title, &faro_font_14, 0);
+  lv_obj_set_style_text_color(title, p.accent, 0);
+  lv_label_set_text(title, "WiFi setup via phone");
+
+  lv_obj_t* cred = lv_label_create(m);
+  lv_obj_set_pos(cred, 0, 22);
+  lv_obj_set_width(cred, 250);
+  lv_obj_set_style_text_font(cred, &faro_font_mono_12, 0);
+  lv_obj_set_style_text_color(cred, p.text_primary, 0);
+  lv_label_set_text_fmt(cred, "SSID: %s\nPwd: %s\nOpen: http://%s",
+                        st.wifi_ap_ssid, st.wifi_ap_pwd, st.wifi_ap_ip);
+
+  lv_obj_t* hint = lv_label_create(m);
+  lv_obj_set_pos(hint, 0, 84);
+  lv_obj_set_width(hint, 250);
+  lv_label_set_long_mode(hint, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_text_font(hint, &faro_font_12, 0);
+  lv_obj_set_style_text_color(hint, p.text_secondary, 0);
+  lv_label_set_text(hint, "Connect your phone to this WiFi and open the address. It stops by itself in 5 min.");
+
+  lv_obj_t* stop_btn = lv_button_create(m);
+  lv_obj_set_size(stop_btn, 118, 24);
+  lv_obj_set_pos(stop_btn, 0, 116);
+  Theme::styleTouchButton(stop_btn, p.danger, lv_color_hex(0xFFFFFF));
+  lv_obj_add_event_cb(stop_btn, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (!self) return;
+    self->_actions.stopWifiSetupAp();
+    self->_show_wifi_ap_modal = false;
+    self->renderBody();
+  }, LV_EVENT_CLICKED, this);
+  lv_obj_t* stopl = lv_label_create(stop_btn);
+  lv_obj_set_style_text_font(stopl, &faro_font_12, 0);
+  lv_label_set_text(stopl, "Stop");
+  lv_obj_center(stopl);
+
+  lv_obj_t* close_btn = lv_button_create(m);
+  lv_obj_set_size(close_btn, 118, 24);
+  lv_obj_set_pos(close_btn, 128, 116);
+  Theme::styleTouchButton(close_btn, p.surface_alt, p.accent);
+  lv_obj_add_event_cb(close_btn, [](lv_event_t* e) {
+    auto* self = static_cast<App*>(lv_event_get_user_data(e));
+    if (!self) return;
+    self->_show_wifi_ap_modal = false;  // keep the AP running
+    self->renderBody();
+  }, LV_EVENT_CLICKED, this);
+  lv_obj_t* closel = lv_label_create(close_btn);
+  lv_obj_set_style_text_font(closel, &faro_font_12, 0);
+  lv_label_set_text(closel, "Close");
+  lv_obj_center(closel);
 }
 
 void App::buildHomeView(lv_obj_t* parent) {
@@ -4168,6 +4513,8 @@ void App::buildMapView(lv_obj_t* parent) {
     lv_obj_t* trk_lbl = lv_label_create(canvas);
     lv_obj_set_style_text_font(trk_lbl, &faro_font_12, 0);
     lv_obj_set_style_text_color(trk_lbl, p.success, 0);
+    lv_obj_set_width(trk_lbl, 130);  // keep the top-centre clear for the north arrow
+    lv_label_set_long_mode(trk_lbl, LV_LABEL_LONG_DOT);
     lv_label_set_text_fmt(trk_lbl, "TRK%s: %.2fkm (%zu pts, %.0fm)%s",
                           trk.recording ? "[REC]" : "",
                           trk.distance_m / 1000.0, trk.point_count,
@@ -4193,6 +4540,8 @@ void App::buildMapView(lv_obj_t* parent) {
     lv_obj_t* src_lbl = lv_label_create(canvas);
     lv_obj_set_style_text_font(src_lbl, &faro_font_12, 0);
     lv_obj_set_style_text_color(src_lbl, _tiles.lastRenderUsedSdTiles() ? p.success : p.text_secondary, 0);
+    lv_obj_set_width(src_lbl, 130);  // keep the top-centre clear for the north arrow
+    lv_label_set_long_mode(src_lbl, LV_LABEL_LONG_DOT);
     lv_label_set_text_fmt(src_lbl, "%s | %s",
                           g.valid ? "GPS LOCK" : "No fix",
                           _tiles.lastRenderUsedSdTiles() ? "SD Tiles OK" : "Grid Map");
@@ -4259,6 +4608,82 @@ void App::buildMapView(lv_obj_t* parent) {
     lv_obj_set_style_text_color(hm, snr_db >= 4 ? p.success : (snr_db >= -2 ? p.warning : p.danger), 0);
     lv_label_set_text_fmt(hm, "%+d", snr_db);
     lv_obj_set_pos(hm, sx, sy);
+  }
+
+  // North arrow (top-centre): a white up-triangle on a black underlay, so it stays visible on
+  // both the light and the high-contrast map palette.
+  {
+    static lv_point_precise_t n_bg[4] = {{146, 8}, {152, 0}, {158, 8}, {146, 8}};
+    static lv_point_precise_t n_fg[4] = {{147, 7}, {152, 2}, {157, 7}, {147, 7}};
+    lv_obj_t* n_bg_l = lv_line_create(canvas);
+    lv_line_set_points(n_bg_l, n_bg, 4);
+    lv_obj_set_style_line_width(n_bg_l, 3, 0);
+    lv_obj_set_style_line_color(n_bg_l, lv_color_hex(0x000000), 0);
+    lv_obj_t* n_fg_l = lv_line_create(canvas);
+    lv_line_set_points(n_fg_l, n_fg, 4);
+    lv_obj_set_style_line_width(n_fg_l, 2, 0);
+    lv_obj_set_style_line_color(n_fg_l, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_t* n_lbl = lv_label_create(canvas);
+    lv_obj_set_style_text_font(n_lbl, &faro_font_12, 0);
+    lv_obj_set_style_text_color(n_lbl, lv_color_hex(0x000000), 0);
+    lv_label_set_text(n_lbl, "N");
+    lv_obj_set_pos(n_lbl, 152, 8);  // dark shadow
+    lv_obj_t* n_lbl_fg = lv_label_create(canvas);
+    lv_obj_set_style_text_font(n_lbl_fg, &faro_font_12, 0);
+    lv_obj_set_style_text_color(n_lbl_fg, lv_color_hex(0xFFFFFF), 0);
+    lv_label_set_text(n_lbl_fg, "N");
+    lv_obj_set_pos(n_lbl_fg, 151, 7);
+  }
+
+  // 40 px scale bar (bottom-left). Ground distance follows the Web-Mercator resolution of the
+  // current zoom at the map centre latitude.
+  {
+    const double lat_rad = clat * 3.14159265358979323846 / 180.0;
+    const double mpp = 156543.03392 * cos(lat_rad) / double(uint32_t(1U) << _map_zoom);
+    const double dist_m = mpp * 40.0;
+    char scale_txt[24] = {0};
+    if (dist_m < 1000.0) {
+      snprintf(scale_txt, sizeof(scale_txt), "~%dm", int(dist_m + 0.5));
+    } else if (dist_m < 10000.0) {
+      snprintf(scale_txt, sizeof(scale_txt), "~%.1fkm", dist_m / 1000.0);
+    } else {
+      snprintf(scale_txt, sizeof(scale_txt), "~%dkm", int(dist_m / 1000.0 + 0.5));
+    }
+    auto make_bar = [&](int x, int y, lv_coord_t width, lv_color_t color) {
+      static lv_point_precise_t pts[4] = {{0, 0}, {40, 0}, {0, 0}, {0, 0}};
+      pts[0].x = x; pts[0].y = y;
+      pts[1].x = x + 40; pts[1].y = y;
+      pts[2].x = x; pts[2].y = y - 4;
+      pts[3].x = x; pts[3].y = y + 4;
+      lv_obj_t* line = lv_line_create(canvas);
+      lv_line_set_points(line, pts, 4);
+      lv_obj_set_style_line_width(line, width, 0);
+      lv_obj_set_style_line_color(line, color, 0);
+      return line;
+    };
+    make_bar(6, 127, 4, lv_color_hex(0x000000));
+    make_bar(6, 127, 2, lv_color_hex(0xFFFFFF));
+    static lv_point_precise_t r_tick[2] = {{0, 0}, {0, 0}};
+    r_tick[0].x = 46; r_tick[0].y = 123;
+    r_tick[1].x = 46; r_tick[1].y = 131;
+    lv_obj_t* rt_bg = lv_line_create(canvas);
+    lv_line_set_points(rt_bg, r_tick, 2);
+    lv_obj_set_style_line_width(rt_bg, 4, 0);
+    lv_obj_set_style_line_color(rt_bg, lv_color_hex(0x000000), 0);
+    lv_obj_t* rt_fg = lv_line_create(canvas);
+    lv_line_set_points(rt_fg, r_tick, 2);
+    lv_obj_set_style_line_width(rt_fg, 2, 0);
+    lv_obj_set_style_line_color(rt_fg, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_t* s_lbl = lv_label_create(canvas);
+    lv_obj_set_style_text_font(s_lbl, &faro_font_12, 0);
+    lv_obj_set_style_text_color(s_lbl, lv_color_hex(0x000000), 0);
+    lv_label_set_text(s_lbl, scale_txt);
+    lv_obj_set_pos(s_lbl, 51, 121);  // dark shadow
+    lv_obj_t* s_lbl_fg = lv_label_create(canvas);
+    lv_obj_set_style_text_font(s_lbl_fg, &faro_font_12, 0);
+    lv_obj_set_style_text_color(s_lbl_fg, lv_color_hex(0xFFFFFF), 0);
+    lv_label_set_text(s_lbl_fg, scale_txt);
+    lv_obj_set_pos(s_lbl_fg, 50, 120);
   }
 
   // Bottom map HUD bar: Coordinates + Pan [<][^][v][>] + [GPS] + [Trk] + Zoom [-][+]
@@ -5099,8 +5524,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     }
 
     lv_obj_t* w_dd = lv_dropdown_create(wcard);
-    lv_obj_set_size(w_dd, 198, 26);
-    lv_obj_set_pos(w_dd, 0, 32);
+    lv_obj_set_size(w_dd, 198, 22);
+    lv_obj_set_pos(w_dd, 0, 30);
     lv_dropdown_set_symbol(w_dd, nullptr);
     lv_dropdown_set_options(w_dd, w_opts);
     lv_dropdown_set_selected(w_dd, w_sel);
@@ -5139,8 +5564,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     }, LV_EVENT_ALL, this);
 
     lv_obj_t* scan_btn = lv_button_create(wcard);
-    lv_obj_set_size(scan_btn, 92, 26);
-    lv_obj_set_pos(scan_btn, 202, 32);
+    lv_obj_set_size(scan_btn, 92, 22);
+    lv_obj_set_pos(scan_btn, 202, 30);
     Theme::styleTouchButton(scan_btn, p.accent, lv_color_hex(0xFFFFFF));
     lv_obj_t* scl = lv_label_create(scan_btn);
     lv_obj_set_style_text_font(scl, &faro_font_12, 0);
@@ -5166,8 +5591,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     }, LV_EVENT_CLICKED, this);
 
     _compose_ta = lv_textarea_create(wcard);
-    lv_obj_set_size(_compose_ta, 198, 28);
-    lv_obj_set_pos(_compose_ta, 0, 62);
+    lv_obj_set_size(_compose_ta, 198, 24);
+    lv_obj_set_pos(_compose_ta, 0, 56);
     lv_textarea_set_one_line(_compose_ta, true);
     if (_wifi_edit_pwd) {
       // never put the stored password back on screen
@@ -5183,8 +5608,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     // not lost by a render. The stored password is never put back into the field.
     if (_wifi_edit_pwd) {
       lv_obj_t* show_btn = lv_button_create(wcard);
-      lv_obj_set_size(show_btn, 42, 28);
-      lv_obj_set_pos(show_btn, 202, 62);
+      lv_obj_set_size(show_btn, 42, 24);
+      lv_obj_set_pos(show_btn, 202, 56);
       Theme::styleTouchButton(show_btn, p.surface_alt, p.accent);
       lv_obj_add_event_cb(show_btn, [](lv_event_t* e) {
         auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -5205,8 +5630,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     }
 
     lv_obj_t* sv_btn = lv_button_create(wcard);
-    lv_obj_set_size(sv_btn, _wifi_edit_pwd ? 48 : 92, 28);
-    lv_obj_set_pos(sv_btn, _wifi_edit_pwd ? 248 : 202, 62);
+    lv_obj_set_size(sv_btn, _wifi_edit_pwd ? 48 : 92, 24);
+    lv_obj_set_pos(sv_btn, _wifi_edit_pwd ? 248 : 202, 56);
     Theme::styleTouchButton(sv_btn, p.accent, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(sv_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -5230,8 +5655,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
 
     // 2x2 Grid of Touch Buttons (144x28 px)
     lv_obj_t* fld_btn = lv_button_create(wcard);
-    lv_obj_set_size(fld_btn, 144, 28);
-    lv_obj_set_pos(fld_btn, 0, 94);
+    lv_obj_set_size(fld_btn, 144, 24);
+    lv_obj_set_pos(fld_btn, 0, 84);
     Theme::styleTouchButton(fld_btn, p.surface_alt, p.accent);
     lv_obj_add_event_cb(fld_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -5255,8 +5680,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_center(fldl);
 
     lv_obj_t* join_btn = lv_button_create(wcard);
-    lv_obj_set_size(join_btn, 144, 28);
-    lv_obj_set_pos(join_btn, 150, 94);
+    lv_obj_set_size(join_btn, 144, 24);
+    lv_obj_set_pos(join_btn, 150, 84);
     Theme::styleTouchButton(join_btn, st.wifi_connected ? p.accent : p.success, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(join_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -5281,8 +5706,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_center(joinl);
 
     lv_obj_t* pwr_btn = lv_button_create(wcard);
-    lv_obj_set_size(pwr_btn, 144, 28);
-    lv_obj_set_pos(pwr_btn, 0, 126);
+    lv_obj_set_size(pwr_btn, 144, 22);
+    lv_obj_set_pos(pwr_btn, 0, 112);
     Theme::styleTouchButton(pwr_btn, st.wifi_enabled ? p.warning : p.surface_alt,
                             st.wifi_enabled ? lv_color_hex(0xFFFFFF) : p.text_primary);
     lv_obj_add_event_cb(pwr_btn, [](lv_event_t* e) {
@@ -5299,8 +5724,8 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_center(pwrl);
 
     lv_obj_t* clr_btn = lv_button_create(wcard);
-    lv_obj_set_size(clr_btn, 144, 28);
-    lv_obj_set_pos(clr_btn, 150, 126);
+    lv_obj_set_size(clr_btn, 144, 22);
+    lv_obj_set_pos(clr_btn, 150, 112);
     Theme::styleTouchButton(clr_btn, p.surface_alt, p.danger);
     lv_obj_add_event_cb(clr_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -5316,6 +5741,32 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_label_set_text(clrl, "Forget Network");
     lv_obj_center(clrl);
 
+    lv_obj_t* ap_btn = lv_button_create(wcard);
+    lv_obj_set_size(ap_btn, 296, 22);
+    lv_obj_set_pos(ap_btn, 0, 136);
+    Theme::styleTouchButton(ap_btn, st.wifi_ap_active ? p.warning : p.surface_alt,
+                            st.wifi_ap_active ? lv_color_hex(0xFFFFFF) : p.accent);
+    lv_obj_add_event_cb(ap_btn, [](lv_event_t* e) {
+      auto* self = static_cast<App*>(lv_event_get_user_data(e));
+      if (!self) return;
+      if (self->_store.status().wifi_ap_active) {
+        self->_actions.stopWifiSetupAp();
+        self->_show_wifi_ap_modal = false;
+      } else {
+        char ssid[33] = {0}, pwd[16] = {0}, ip[16] = {0};
+        if (self->_actions.startWifiSetupAp(ssid, sizeof(ssid), pwd, sizeof(pwd), ip, sizeof(ip))) {
+          self->_show_wifi_ap_modal = true;
+        } else {
+          strncpy(self->_store.status().last_cli_reply, "Setup AP failed to start",
+                  sizeof(self->_store.status().last_cli_reply) - 1);
+        }
+      }
+      self->renderBody();
+    }, LV_EVENT_CLICKED, this);
+    lv_obj_t* apl = lv_label_create(ap_btn);
+    lv_obj_set_style_text_font(apl, &faro_font_12, 0);
+    lv_label_set_text(apl, st.wifi_ap_active ? "Phone setup active - Stop" : "Setup WiFi via phone");
+    lv_obj_center(apl);
     return;
   }
 

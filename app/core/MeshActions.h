@@ -49,6 +49,16 @@ public:
   }
   // Sixi: write a fresh 16-byte PSK to /faro/wifi_psk.bin and enable the guarded TCP transport.
   virtual bool generateWifiPsk() { return false; }
+
+  // Phone WiFi setup: a temporary WPA2 SoftAP + tiny HTTP form on port 80. Station WiFi stays up.
+  virtual bool startWifiSetupAp(char* out_ssid, size_t ssid_len, char* out_pwd, size_t pwd_len,
+                                char* out_ip, size_t ip_len) {
+    (void)out_ssid; (void)ssid_len; (void)out_pwd; (void)pwd_len; (void)out_ip; (void)ip_len;
+    return false;
+  }
+  virtual void stopWifiSetupAp() {}
+  virtual void pollWifiSetup() {}
+  virtual bool wifiSetupApActive() const { return false; }
   virtual bool setBlePin(uint32_t pin) = 0;
   virtual bool setRepeatEnabled(bool enabled) = 0;
   virtual bool setDefaultScope(const char* scope_name) = 0;

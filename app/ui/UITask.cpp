@@ -512,6 +512,7 @@ public:
     actions.pollTelemetry(t0, mv, pct, power.isChargingEstimated(),
                           sd.isMounted(), sd.usedMB(), sd.totalMB(),
                           gps_port.sentenceCount());
+    actions.pollWifiSetup();  // serves the phone-setup SoftAP form when it is running
     store.tickMessageTimeouts(t0);
     for (uint32_t resend_id = 0; store.takeResendRequest(resend_id);) {
       actions.resendDirectMessage(resend_id);

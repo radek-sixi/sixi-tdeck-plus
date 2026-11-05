@@ -8,7 +8,7 @@ companion firmware. It runs on the device next to the normal companion interface
   Faro attaches through upstream's `platformio.local.ini` hook and the `AbstractUITask` listener; it adds no
   companion opcodes.
 - **Licence:** Apache-2.0 (see `LICENSE`, `NOTICE`, `LICENSES/`, `docs/THIRD_PARTY.md`).
-- **Status:** 0.11.0, pre-1.0. Release binaries are 0.11.0 (see `docs/FLASHING.md`). Test it on your own
+- **Status:** 0.11.1, pre-1.0. Release binaries are 0.11.1 (see `docs/FLASHING.md`). Test it on your own
   hardware before relying on it. 0.10.3 added Wi-Fi network scanning, I2S audio notifications, touch map
   drag/pan, emoji support, preset dropdowns, high-contrast textbox focus/cursor, and MicroSD backup fixes;
   0.10.4 fixed ESP32-S3 Wi-Fi scan driver parameters, BLE MITM pairing & bond recovery, screen idle
@@ -21,18 +21,21 @@ companion firmware. It runs on the device next to the normal companion interface
   **Snake** easter egg: type `snake` while no text field is focused. 0.11.0 adds message management
   (delete/clear/search a thread and jump to the first unread), a configurable CPU profile (Auto /
   240 / 160 / 80 MHz) and an About/Support tab with version, reset reason, heap and shortcuts.
+  0.11.1 adds phone Wi-Fi setup (temporary WPA2 access point `Faro-XXXX` with a small web form, auto-stops
+  after 5 min), a **2048** easter egg (type `2048` outside a text field) and a north arrow + 40 px
+  scale bar on the map.
 
 ## Download & install
 
-**Firmware:** the [`v0.11.0` release](https://github.com/radek-sixi/sixi-tdeck-plus/releases/tag/v0.11.0)
+**Firmware:** the [`v0.11.1` release](https://github.com/radek-sixi/sixi-tdeck-plus/releases/tag/v0.11.1)
 has one `.bin` per board, a desktop `.deb` and a firmware bundle. Verify with `sha256sum -c SHA256SUMS`.
 
 T-Deck / T-Deck Plus:
 
 | What | File | Flash at |
 |---|---|---|
-| Full image (first install / recovery) | [`faro-tdeck-0.11.0-merged.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.0/faro-tdeck-0.11.0-merged.bin) | `0x0` |
-| App only (update, keeps keys & contacts) | [`faro-tdeck-0.11.0-app.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.0/faro-tdeck-0.11.0-app.bin) | `0x10000` |
+| Full image (first install / recovery) | [`faro-tdeck-0.11.1-merged.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.1/faro-tdeck-0.11.1-merged.bin) | `0x0` |
+| App only (update, keeps keys & contacts) | [`faro-tdeck-0.11.1-app.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.1/faro-tdeck-0.11.1-app.bin) | `0x10000` |
 
 **Three ways to install:**
 

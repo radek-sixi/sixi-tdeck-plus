@@ -4,8 +4,10 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <SHA256.h>
+#include <ctype.h>
 #if defined(ESP32)
 #include <esp_wifi.h>
+#include <esp_system.h>
 #include <BLEDevice.h>
 #include <esp_gap_ble_api.h>
 #include <esp_gatt_defs.h>
@@ -38,6 +40,24 @@ bool isAllZero(const uint8_t* buf, size_t len) {
     if (buf[i] != 0) return false;
   }
   return true;
+}
+
+void urlDecodeInto(const char* src, char* dst, size_t max_len) {
+  if (!src || !dst || max_len == 0) return;
+  size_t o = 0;
+  for (size_t i = 0; src[i] && o + 1 < max_len; ++i) {
+    if (src[i] == '+') {
+      dst[o++] = ' ';
+    } else if (src[i] == '%' && isxdigit((unsigned char)src[i + 1]) &&
+               isxdigit((unsigned char)src[i + 2])) {
+      char hex[3] = {src[i + 1], src[i + 2], '\0'};
+      dst[o++] = char(strtol(hex, nullptr, 16));
+      i += 2;
+    } else {
+      dst[o++] = src[i];
+    }
+  }
+  dst[o] = '\0';
 }
 }  // namespace
 
@@ -143,6 +163,195 @@ void DeviceMeshActions::startWifiTransport() {
   _ifaces->addInterface(InterfaceType::WiFi, &wifi_interface);
   _store.status().wifi_auth_enabled = guarded;
   Serial.printf("[FARO-WIFI] transport ready (guarded=%d, port=5000)\n", int(guarded));
+#endif
+}
+
+bool DeviceMeshActions::startWifiSetupAp(char* out_ssid, size_t ssid_len, char* out_pwd, size_t pwd_len,
+                                         char* out_ip, size_t ip_len) {
+#if defined(ESP32) && defined(ENABLE_WIFI_INTERFACE)
+  if (_wifi_setup_active) {
+    if (out_ssid && ssid_len) strncpy(out_ssid, _store.status().wifi_ap_ssid, ssid_len - 1);
+    if (out_pwd && pwd_len) strncpy(out_pwd, _store.status().wifi_ap_pwd, pwd_len - 1);
+    if (out_ip && ip_len) strncpy(out_ip, _store.status().wifi_ap_ip, ip_len - 1);
+    return true;
+  }
+
+  uint8_t mac[6] = {0};
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  char ssid[33] = {0};
+  snprintf(ssid, sizeof(ssid), "Faro-%02X%02X", mac[4], mac[5]);
+  static const char kPwdChars[] = "abcdefghjkmnpqrstuvwxyz23456789";
+  char pwd[16] = {0};
+  uint8_t rnd[8] = {0};
+  core::fillRandom(rnd, sizeof(rnd));
+  for (size_t i = 0; i < 8; ++i) pwd[i] = kPwdChars[rnd[i] % (sizeof(kPwdChars) - 1)];
+  pwd[8] = '\0';
+
+  WiFi.mode(WIFI_AP_STA);  // keep the station link, add the setup AP
+  if (!WiFi.softAP(ssid, pwd)) {
+    Serial.println("[FARO-WIFI-AP] softAP start failed");
+    return false;
+  }
+  _wifi_setup_server = new WiFiServer(80);
+  if (_wifi_setup_server) static_cast<WiFiServer*>(_wifi_setup_server)->begin();
+  _wifi_setup_active = true;
+  _wifi_setup_started_ms = millis();
+
+  SystemStatus& st = _store.status();
+  strncpy(st.wifi_ap_ssid, ssid, sizeof(st.wifi_ap_ssid) - 1);
+  strncpy(st.wifi_ap_pwd, pwd, sizeof(st.wifi_ap_pwd) - 1);
+  strncpy(st.wifi_ap_ip, "192.168.4.1", sizeof(st.wifi_ap_ip) - 1);
+  st.wifi_ap_active = true;
+  _store.bumpVersion();
+  Serial.printf("[FARO-WIFI-AP] started ssid='%s' ip=%s\n", ssid, st.wifi_ap_ip);
+
+  if (out_ssid && ssid_len) strncpy(out_ssid, ssid, ssid_len - 1);
+  if (out_pwd && pwd_len) strncpy(out_pwd, pwd, pwd_len - 1);
+  if (out_ip && ip_len) strncpy(out_ip, "192.168.4.1", ip_len - 1);
+  return true;
+#else
+  (void)out_ssid; (void)ssid_len; (void)out_pwd; (void)pwd_len; (void)out_ip; (void)ip_len;
+  return false;
+#endif
+}
+
+void DeviceMeshActions::stopWifiSetupAp() {
+#if defined(ESP32) && defined(ENABLE_WIFI_INTERFACE)
+  if (!_wifi_setup_active) return;
+  if (_wifi_setup_server) {
+    static_cast<WiFiServer*>(_wifi_setup_server)->end();
+    delete static_cast<WiFiServer*>(_wifi_setup_server);
+    _wifi_setup_server = nullptr;
+  }
+  _wifi_setup_active = false;
+  SystemStatus& st = _store.status();
+  st.wifi_ap_active = false;
+  st.wifi_ap_ssid[0] = '\0';
+  st.wifi_ap_pwd[0] = '\0';
+  _store.bumpVersion();
+  WiFi.softAPdisconnect(true);
+  if (!_prefs || !_prefs->wifi_enabled) {
+    WiFi.mode(WIFI_OFF);
+  } else {
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(true);  // ESP-IDF requires modem sleep while BLE is also enabled
+  }
+  Serial.println("[FARO-WIFI-AP] stopped");
+#endif
+}
+
+bool DeviceMeshActions::wifiSetupApActive() const {
+  return _wifi_setup_active;
+}
+
+void DeviceMeshActions::pollWifiSetup() {
+#if defined(ESP32) && defined(ENABLE_WIFI_INTERFACE)
+  if (!_wifi_setup_active) return;
+  if (millis() - _wifi_setup_started_ms > 300000UL) {
+    Serial.println("[FARO-WIFI-AP] 5 min timeout, stopping");
+    stopWifiSetupAp();
+    return;
+  }
+  WiFiServer* srv = static_cast<WiFiServer*>(_wifi_setup_server);
+  if (!srv) return;
+  WiFiClient cli = srv->available();
+  if (!cli) return;
+
+  char req[512] = {0};
+  size_t n = 0;
+  const uint32_t t0 = millis();
+  while (cli.connected() && millis() - t0 < 200 && n + 1 < sizeof(req)) {
+    const int avail = cli.available();
+    if (avail <= 0) {
+      delay(5);  // let the client/stack breathe instead of busy-waiting the UI loop
+      continue;
+    }
+    const int rd = cli.read(reinterpret_cast<uint8_t*>(req) + n,
+                            (avail < int(sizeof(req) - 1 - n)) ? avail : int(sizeof(req) - 1 - n));
+    if (rd <= 0) break;
+    n += size_t(rd);
+    if (n >= 4 && req[n - 4] == '\r' && req[n - 3] == '\n' &&
+        req[n - 2] == '\r' && req[n - 1] == '\n') break;  // end of request line/headers
+  }
+  req[n] = '\0';
+
+  const char* ok_headers = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n";
+  const char* kFormBody =
+      "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>"
+      "<title>Faro WiFi setup</title>"
+      "<body style='background:#0d1117;color:#e6edf3;font-family:sans-serif;margin:24px'>"
+      "<h2>Faro WiFi setup</h2>"
+      "<form action=/save>"
+      "<label>Wi-Fi SSID <input name=ssid maxlength=32></label><br><br>"
+      "<label>Password <input name=pwd type=password maxlength=63></label><br><br>"
+      "<button>Connect</button></form></body>";
+
+  if (strncmp(req, "GET ", 4) != 0) {
+    cli.print(ok_headers);
+    cli.print(kFormBody);
+    cli.stop();
+    return;
+  }
+  char pathbuf[128] = {0};
+  const char* path = req + 4;
+  const char* sp = strchr(path, ' ');
+  size_t plen = sp ? size_t(sp - path) : strlen(path);
+  if (plen >= sizeof(pathbuf)) plen = sizeof(pathbuf) - 1;
+  memcpy(pathbuf, path, plen);
+  pathbuf[plen] = '\0';
+
+  if (strncmp(pathbuf, "/save?", 6) == 0) {
+    char ssid[33] = {0};
+    char pwd[65] = {0};
+    char* p = pathbuf + 6;
+    while (*p) {
+      char* eq = strchr(p, '=');
+      char* amp = strchr(p, '&');
+      char* end = amp ? amp : (p + strlen(p));
+      if (eq && eq < end) {
+        char key[16] = {0};
+        char val[96] = {0};
+        const size_t kl = size_t(eq - p);
+        if (kl < sizeof(key)) memcpy(key, p, kl);
+        const size_t vl = size_t(end - (eq + 1));
+        if (vl < sizeof(val)) memcpy(val, eq + 1, vl);
+        char dec[96] = {0};
+        urlDecodeInto(val, dec, sizeof(dec));
+        if (strcmp(key, "ssid") == 0) {
+          strncpy(ssid, dec, sizeof(ssid) - 1);
+          ssid[sizeof(ssid) - 1] = '\0';
+        } else if (strcmp(key, "pwd") == 0) {
+          strncpy(pwd, dec, sizeof(pwd) - 1);
+          pwd[sizeof(pwd) - 1] = '\0';
+        }
+      }
+      if (amp) p = amp + 1;
+      else break;
+    }
+
+    if (ssid[0]) {
+      cli.print(ok_headers);
+      cli.print("<meta charset=utf-8><body style='font-family:sans-serif;background:#0d1117;color:#e6edf3;margin:24px'>"
+                "<h2>Saved</h2><p>The device is joining the Wi-Fi network. You can close this page and reconnect "
+                "your phone to your normal network.</p></body>");
+      cli.flush();
+      delay(20);
+      cli.stop();
+      // Joining the station switches the radio out of AP mode; tear the AP down afterwards.
+      setWifiConfig(true, ssid, pwd[0] ? pwd : "");
+      stopWifiSetupAp();
+      return;
+    }
+    cli.print(ok_headers);
+    cli.print("<meta charset=utf-8><body style='font-family:sans-serif;background:#0d1117;color:#e6edf3;margin:24px'>"
+              "<h2>Missing SSID</h2><a href=/>Back</a></body>");
+    cli.stop();
+    return;
+  }
+
+  cli.print(ok_headers);
+  cli.print(kFormBody);
+  cli.stop();
 #endif
 }
 

@@ -340,6 +340,10 @@ struct SystemStatus {
   bool     wifi_enabled = true;
   bool     wifi_connected = false;
   bool     wifi_auth_enabled = false;  // Sixi: /faro/wifi_psk.bin found, TCP 5000 guarded
+  bool     wifi_ap_active = false;     // phone-setup SoftAP is running
+  char     wifi_ap_ssid[33] = {0};
+  char     wifi_ap_pwd[16] = {0};
+  char     wifi_ap_ip[16] = "192.168.4.1";
   char     wifi_ssid[33] = {0};
   char     wifi_pwd[65] = {0};
   char     wifi_ip[16] = "0.0.0.0";

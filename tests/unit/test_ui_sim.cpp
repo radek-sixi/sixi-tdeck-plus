@@ -87,6 +87,20 @@ int main() {
     assert(non_zero > 1000);
   }
 
+  // 2048 easter egg: keyboard moves must merge tiles without crashing and keep rendering
+  app.showScreen(faro::ui::ScreenId::Game2048);
+  for (int mv = 0; mv < 12; ++mv) {
+    app.onKeyPress("wdsa"[mv % 4]);
+    lv_tick_inc(25);
+    lv_timer_handler();
+    lv_refr_now(disp);
+    size_t non_zero = 0;
+    for (size_t px = 0; px < 320 * 240; ++px) if (g_test_fb[px] != 0) ++non_zero;
+    assert(non_zero > 1000);
+  }
+  app.onKeyPress('n');  // New game
+  app.onKeyPress('q');  // Exit back to Home
+
   // Test DM send + simulated ACK via EventBus
   uint32_t crc = 0;
   faro::core::DeliveryState dstate = faro::core::DeliveryState::Queued;

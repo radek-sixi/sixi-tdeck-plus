@@ -58,6 +58,11 @@ public:
   bool setNodeName(const char* name) override;
   bool setWifiConfig(bool enabled, const char* ssid, const char* password) override;
   size_t scanWifiNetworks(char ssids[][33], int16_t rssis[], size_t max_networks) override;
+  bool startWifiSetupAp(char* out_ssid, size_t ssid_len, char* out_pwd, size_t pwd_len,
+                        char* out_ip, size_t ip_len) override;
+  void stopWifiSetupAp() override;
+  void pollWifiSetup() override;
+  bool wifiSetupApActive() const override;
   bool setBlePin(uint32_t pin) override;
   bool setRepeatEnabled(bool enabled) override;
   bool setDefaultScope(const char* scope_name) override;
@@ -126,6 +131,9 @@ private:
   uint32_t _last_poll_ms = 0;
   uint32_t _wifi_disconnected_since_ms = 0;  // first poll that saw no WiFi link; 0 = connected/off
   bool     _wifi_transport_started = false;
+  void*    _wifi_setup_server = nullptr;     // WiFiServer* (kept as void* to avoid header deps)
+  bool     _wifi_setup_active = false;
+  uint32_t _wifi_setup_started_ms = 0;
   uint32_t _reboot_at_ms = 0;  // pending restart after an identity import
   static constexpr size_t kDutySlots = 61;  // 60 one-minute intervals
   uint32_t _duty_ms[kDutySlots] = {};

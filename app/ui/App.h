@@ -26,6 +26,7 @@ enum class ScreenId : uint8_t {
   Diagnostics,
   BootWizard,
   Game,
+  Game2048,
   _Count
 };
 
@@ -87,9 +88,11 @@ private:
   void computeMapBase(double& out_lat, double& out_lon);
   void renderMapCanvas();
   void buildSettingsView(lv_obj_t* parent);
+  void buildWifiApModal();
   void buildDiagnosticsView(lv_obj_t* parent);
   void buildBootWizardView(lv_obj_t* parent);
   void buildGameView(lv_obj_t* parent);
+  void buildGame2048View(lv_obj_t* parent);
 
   // Easter egg: a small Snake game (touch swipe, WASD, trackball/keyboard pause).
   enum class SnakeDir : uint8_t { Up, Down, Left, Right };
@@ -104,6 +107,12 @@ private:
   void renderSnakeCanvas();
   void updateSnakeHud();
   void snakeSpawnFood();
+
+  // 2048 easter egg: type "2048" outside a text field.
+  void new2048();
+  void spawn2048();
+  void move2048(int dir);  // 0=up, 1=down, 2=left, 3=right
+  void update2048();
 
   core::AppStore& _store;
   core::IMeshActions& _actions;
@@ -133,6 +142,7 @@ private:
   bool     _mesh_tuning_page = false; // False = Contacts/Telem, True = RF Tuning/ACKs
   bool     _wifi_edit_pwd = false;    // False = edit WiFi SSID, True = edit WiFi Password
   bool     _wifi_show_pwd = false;    // Reveal the password currently typed in the field (never the stored one)
+  bool     _show_wifi_ap_modal = false;
   static constexpr size_t kMaxScannedWifi = 8;
   char     _wifi_scan_ssids[kMaxScannedWifi][33] = {};
   int16_t  _wifi_scan_rssis[kMaxScannedWifi] = {};
@@ -201,6 +211,17 @@ private:
   lv_obj_t* _snake_score_lbl = nullptr;
   lv_obj_t* _snake_status_lbl = nullptr;
   lv_obj_t* _snake_pause_lbl = nullptr;
+
+  uint16_t _2048_grid[16] = {};
+  uint16_t _2048_score = 0;
+  uint16_t _2048_best = 0;
+  bool     _2048_over = false;
+  bool     _2048_won = false;
+  lv_obj_t* _2048_tiles[16] = {};
+  lv_obj_t* _2048_score_lbl = nullptr;
+  lv_obj_t* _2048_status_lbl = nullptr;
+  int16_t  _2048_drag_x = 0;
+  int16_t  _2048_drag_y = 0;
 };
 
 }  // namespace faro::ui
