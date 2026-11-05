@@ -116,6 +116,7 @@ private:
   bool     _settings_hub = true;      // True = show 3x3 touch category grid in Settings
   bool     _mesh_tuning_page = false; // False = Contacts/Telem, True = RF Tuning/ACKs
   bool     _wifi_edit_pwd = false;    // False = edit WiFi SSID, True = edit WiFi Password
+  bool     _wifi_show_pwd = false;    // Reveal the password currently typed in the field (never the stored one)
   static constexpr size_t kMaxScannedWifi = 8;
   char     _wifi_scan_ssids[kMaxScannedWifi][33] = {};
   int16_t  _wifi_scan_rssis[kMaxScannedWifi] = {};

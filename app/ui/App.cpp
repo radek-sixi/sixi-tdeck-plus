@@ -4468,6 +4468,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
 
   // SUBPAGE 4 (5/8): Dedicated WiFi Network Station Setup (Scan + SSID Dropdown + Password -> DHCP IP)
   if (_settings_tab == 4) {
+    _wifi_show_pwd = false;  // a rebuild never re-reveals a password
     lv_obj_t* wcard = lv_obj_create(parent);
     lv_obj_set_size(wcard, 308, 170);
     Theme::styleCard(wcard, outdoor);
@@ -4477,7 +4478,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_t* wlbl = lv_label_create(wcard);
     lv_obj_set_pos(wlbl, 0, 0);
     lv_obj_set_style_text_font(wlbl, &faro_font_mono_12, 0);
-    lv_obj_set_style_text_color(wlbl, p.text_primary, 0);
+    lv_obj_set_style_text_color(wlbl, st.wifi_connected ? p.success : p.text_primary, 0);
     lv_label_set_text_fmt(wlbl,
                           "WiFi:%s %s (%s)\n"
                           "Auth:%s | %.16s | %s",
@@ -4540,6 +4541,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
           self->_store.status().wifi_ssid[sizeof(self->_store.status().wifi_ssid) - 1] = '\0';
           // Automatically switch textbox to Password entry after picking an SSID
           self->_wifi_edit_pwd = true;
+          self->_wifi_show_pwd = false;
           self->renderBody();
         }
       }
@@ -4567,6 +4569,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
         strncpy(self->_store.status().wifi_ssid, self->_wifi_scan_ssids[0],
                 sizeof(self->_store.status().wifi_ssid) - 1);
         self->_wifi_edit_pwd = true;
+        self->_wifi_show_pwd = false;
       }
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
@@ -4585,9 +4588,34 @@ void App::buildSettingsView(lv_obj_t* parent) {
     }
     lv_obj_set_style_text_font(_compose_ta, &faro_font_12, 0);
 
+    // Password visibility: toggling changes the textarea in place, so a half-typed password is
+    // not lost by a render. The stored password is never put back into the field.
+    if (_wifi_edit_pwd) {
+      lv_obj_t* show_btn = lv_button_create(wcard);
+      lv_obj_set_size(show_btn, 42, 28);
+      lv_obj_set_pos(show_btn, 202, 62);
+      Theme::styleTouchButton(show_btn, p.surface_alt, p.accent);
+      lv_obj_add_event_cb(show_btn, [](lv_event_t* e) {
+        auto* self = static_cast<App*>(lv_event_get_user_data(e));
+        auto* btn = static_cast<lv_obj_t*>(lv_event_get_target(e));
+        if (!self || !btn) return;
+        self->_wifi_show_pwd = !self->_wifi_show_pwd;
+        if (self->_compose_ta) {
+          lv_textarea_set_password_mode(self->_compose_ta, !self->_wifi_show_pwd);
+        }
+        if (lv_obj_get_child_count(btn) > 0) {
+          lv_label_set_text(lv_obj_get_child(btn, 0), self->_wifi_show_pwd ? "Hide" : "Show");
+        }
+      }, LV_EVENT_CLICKED, this);
+      lv_obj_t* shl = lv_label_create(show_btn);
+      lv_obj_set_style_text_font(shl, &faro_font_12, 0);
+      lv_label_set_text(shl, "Show");
+      lv_obj_center(shl);
+    }
+
     lv_obj_t* sv_btn = lv_button_create(wcard);
-    lv_obj_set_size(sv_btn, 92, 28);
-    lv_obj_set_pos(sv_btn, 202, 62);
+    lv_obj_set_size(sv_btn, _wifi_edit_pwd ? 48 : 92, 28);
+    lv_obj_set_pos(sv_btn, _wifi_edit_pwd ? 248 : 202, 62);
     Theme::styleTouchButton(sv_btn, p.accent, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(sv_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
@@ -4600,12 +4628,13 @@ void App::buildSettingsView(lv_obj_t* parent) {
       } else {
         self->_actions.setWifiConfig(true, txt ? txt : "", self->_store.status().wifi_pwd);
       }
+      self->_wifi_show_pwd = false;
       self->updateStatusBar();
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* svl = lv_label_create(sv_btn);
     lv_obj_set_style_text_font(svl, &faro_font_12, 0);
-    lv_label_set_text(svl, _wifi_edit_pwd ? "Save Pwd" : "Save SSID");
+    lv_label_set_text(svl, _wifi_edit_pwd ? "Save" : "Save SSID");
     lv_obj_center(svl);
 
     // 2x2 Grid of Touch Buttons (144x28 px)
@@ -4626,6 +4655,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
         }
       }
       self->_wifi_edit_pwd = !self->_wifi_edit_pwd;
+      self->_wifi_show_pwd = false;
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* fldl = lv_label_create(fld_btn);
@@ -4636,7 +4666,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
     lv_obj_t* join_btn = lv_button_create(wcard);
     lv_obj_set_size(join_btn, 144, 28);
     lv_obj_set_pos(join_btn, 150, 94);
-    Theme::styleTouchButton(join_btn, p.success, lv_color_hex(0xFFFFFF));
+    Theme::styleTouchButton(join_btn, st.wifi_connected ? p.accent : p.success, lv_color_hex(0xFFFFFF));
     lv_obj_add_event_cb(join_btn, [](lv_event_t* e) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       if (self->_compose_ta) {
@@ -4650,12 +4680,13 @@ void App::buildSettingsView(lv_obj_t* parent) {
       } else {
         self->_actions.setWifiConfig(true, self->_store.status().wifi_ssid, self->_store.status().wifi_pwd);
       }
+      self->_wifi_show_pwd = false;
       self->updateStatusBar();
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
     lv_obj_t* joinl = lv_label_create(join_btn);
     lv_obj_set_style_text_font(joinl, &faro_font_12, 0);
-    lv_label_set_text(joinl, "Connect WiFi");
+    lv_label_set_text(joinl, st.wifi_connected ? "Reconnect" : "Connect WiFi");
     lv_obj_center(joinl);
 
     lv_obj_t* pwr_btn = lv_button_create(wcard);
@@ -4667,6 +4698,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
       auto* self = static_cast<App*>(lv_event_get_user_data(e));
       bool next = !self->_store.status().wifi_enabled;
       self->_actions.setWifiConfig(next, self->_store.status().wifi_ssid, self->_store.status().wifi_pwd);
+      self->_wifi_show_pwd = false;
       self->updateStatusBar();
       self->renderBody();
     }, LV_EVENT_CLICKED, this);
@@ -4684,6 +4716,7 @@ void App::buildSettingsView(lv_obj_t* parent) {
       self->_store.status().wifi_ssid[0] = '\0';
       self->_store.status().wifi_pwd[0] = '\0';
       self->_actions.setWifiConfig(false, "", "");
+      self->_wifi_show_pwd = false;
       self->updateStatusBar();
       self->renderBody();
     }, LV_EVENT_CLICKED, this);

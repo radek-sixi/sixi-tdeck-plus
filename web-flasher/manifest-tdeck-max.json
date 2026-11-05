@@ -1,13 +1,13 @@
 {
-  "name": "Faro 0.10.6 — LilyGo T-Deck MAX",
-  "version": "0.10.6",
+  "name": "Faro 0.10.7 — LilyGo T-Deck MAX",
+  "version": "0.10.7",
   "new_install_prompt_erase": false,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.10.6/faro-tdeck-max-0.10.6-merged.bin",
+          "path": "https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.10.7/faro-tdeck-max-0.10.7-merged.bin",
           "offset": 0
         }
       ]
