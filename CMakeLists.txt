@@ -80,6 +80,13 @@ if(EXISTS "${LVGL_ROOT}/src/lv_init.c")
 
   add_library(faro_ui STATIC
     app/ui/App.cpp
+    app/ui/AppGames.cpp
+    app/ui/AppMap.cpp
+    app/ui/AppViewsDiag.cpp
+    app/ui/AppViewsMesh.cpp
+    app/ui/AppViewsMessaging.cpp
+    app/ui/AppViewsSettings.cpp
+    app/ui/AppViewsSixi.cpp
     app/ui/Theme.cpp
     app/ui/i18n/Strings.cpp
     app/ui/fonts/faro_font_12.c

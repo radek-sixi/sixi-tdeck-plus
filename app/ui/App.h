@@ -224,4 +224,30 @@ private:
   int16_t  _2048_drag_y = 0;
 };
 
+template <typename Pred>
+size_t App::sortedContacts(size_t* out, size_t max_out, Pred keep) const {
+  size_t n = 0;
+  for (size_t i = 0; i < faro::core::AppStore::kMaxContacts && n < max_out; ++i) {
+    const faro::core::ContactRecord& c = _store.contacts()[i];
+    if (c.valid && keep(c)) out[n++] = i;
+  }
+  const faro::core::ContactRecord* cs = _store.contacts();
+  // Insertion sort: small n, and the order stays stable between renders
+  for (size_t i = 1; i < n; ++i) {
+    const size_t v = out[i];
+    size_t j = i;
+    while (j > 0) {
+      const faro::core::ContactRecord& a = cs[out[j - 1]];
+      const faro::core::ContactRecord& b = cs[v];
+      const bool b_first = (b.favourite && !a.favourite) ||
+                           (b.favourite == a.favourite && b.last_advert_ts > a.last_advert_ts);
+      if (!b_first) break;
+      out[j] = out[j - 1];
+      --j;
+    }
+    out[j] = v;
+  }
+  return n;
+}
+
 }  // namespace faro::ui

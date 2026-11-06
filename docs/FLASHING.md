@@ -1,11 +1,11 @@
 # Flashing Faro
 
-Release files (GitHub release `v0.11.1`):
+Release files (GitHub release `v0.11.2`):
 
 | File | Flash at | Use |
 |---|---|---|
-| `faro-<board>-0.11.1-merged.bin` | `0x0` | First install or recovery: bootloader, partition table, `boot_app0`, app |
-| `faro-<board>-0.11.1-app.bin` | `0x10000` | Update of an existing Faro or MeshCore companion install; keeps identity, contacts, channels |
+| `faro-<board>-0.11.2-merged.bin` | `0x0` | First install or recovery: bootloader, partition table, `boot_app0`, app |
+| `faro-<board>-0.11.2-app.bin` | `0x10000` | Update of an existing Faro or MeshCore companion install; keeps identity, contacts, channels |
 | `SHA256SUMS` | — | Check first: `sha256sum -c SHA256SUMS` |
 
 `<board>` is `tdeck` (T-Deck and T-Deck Plus), `tdeck-max`, `thinknode-m9`, `tbeam-supreme` or `heltec-v3`.
@@ -25,6 +25,8 @@ while no text field is focused. 0.11.0 adds message management (delete/clear/sea
 to the first unread), a configurable CPU profile and an About/Support tab. 0.11.1 adds phone Wi-Fi
 setup (temporary WPA2 access point `Faro-XXXX` with a small web form, auto-stops after 5 min), a
 **2048** easter egg (type `2048` outside a text field) and a north arrow + 40 px scale bar on the map.
+0.11.2 splits `App.cpp` into themed translation units with shared helpers in `AppUiShared.h` — no
+functional change.
 
 ## Web flasher (browser, no command line)
 
@@ -38,7 +40,7 @@ You can flash from Chrome or Edge without installing anything, using an
   host without it, so for URL-based flashing use the CORS-enabled copy on GitHub Pages:
 
   ```
-  https://radek-sixi.github.io/sixi-tdeck-plus/firmware/v0.11.1/faro-tdeck-0.11.1-merged.bin
+  https://radek-sixi.github.io/sixi-tdeck-plus/firmware/v0.11.2/faro-tdeck-0.11.2-merged.bin
   ```
 
   (same pattern for the other boards and the `-app.bin`; the Mesh America configurator catalog also lists Faro).
@@ -61,9 +63,9 @@ Switch the device off, connect USB-C, hold the trackball pressed, switch on, rel
 
 ```bash
 # first install
-esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x0 faro-tdeck-0.11.1-merged.bin
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x0 faro-tdeck-0.11.2-merged.bin
 # update, keeps data
-esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x10000 faro-tdeck-0.11.1-app.bin
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 921600 write-flash 0x10000 faro-tdeck-0.11.2-app.bin
 ```
 
 On Windows the port is `COMx`, on macOS `/dev/cu.usbmodem*`. If 921600 baud fails, use 460800.
