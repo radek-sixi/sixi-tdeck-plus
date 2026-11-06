@@ -382,7 +382,8 @@ void App::onKeyPress(uint8_t key) {
     return;
   }
 
-  // Easter eggs: type "snake" or "2048" while no text field is focused.
+  // Easter eggs: type "snake", "tile" or "2048" while no text field is focused. "tile" exists
+  // because the T-Deck keyboard layer for digits is awkward; letters work everywhere.
   {
     static char secret[5] = {0};
     static uint8_t secret_len = 0;
@@ -395,7 +396,7 @@ void App::onKeyPress(uint8_t key) {
       } else {
         secret[secret_len++] = char(k);
       }
-      if (secret_len == 4 && memcmp(secret, "2048", 4) == 0) {
+      if (secret_len == 4 && (memcmp(secret, "2048", 4) == 0 || memcmp(secret, "tile", 4) == 0)) {
         secret_len = 0;
         new2048();
         showScreen(ScreenId::Game2048);

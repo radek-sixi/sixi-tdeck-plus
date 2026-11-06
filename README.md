@@ -8,7 +8,7 @@ companion firmware. It runs on the device next to the normal companion interface
   Faro attaches through upstream's `platformio.local.ini` hook and the `AbstractUITask` listener; it adds no
   companion opcodes.
 - **Licence:** Apache-2.0 (see `LICENSE`, `NOTICE`, `LICENSES/`, `docs/THIRD_PARTY.md`).
-- **Status:** 0.11.4, pre-1.0. Release binaries are 0.11.4 (see `docs/FLASHING.md`). Test it on your own
+- **Status:** 0.11.5, pre-1.0. Release binaries are 0.11.5 (see `docs/FLASHING.md`). Test it on your own
   hardware before relying on it. 0.10.3 added Wi-Fi network scanning, I2S audio notifications, touch map
   drag/pan, emoji support, preset dropdowns, high-contrast textbox focus/cursor, and MicroSD backup fixes;
   0.10.4 fixed ESP32-S3 Wi-Fi scan driver parameters, BLE MITM pairing & bond recovery, screen idle
@@ -28,19 +28,20 @@ companion firmware. It runs on the device next to the normal companion interface
   to the map centre are drawn (the rest collapse into a "+N more" badge) and the GPS/SD status moved
   off the canvas into the bottom HUD button. 0.11.4 fixes the 2048 board not repainting after a move
   (LVGL 9.3 coalesces style-only changes; `update2048` now forces a full-screen invalidation) and adds
-  a pixel-level regression test for it.
+  a pixel-level regression test for it. 0.11.5 adds a letter alias for the 2048 easter egg: type
+  `tile` (the T-Deck digit layer is awkward; `2048` still works where a number row exists).
 
 ## Download & install
 
-**Firmware:** the [`v0.11.4` release](https://github.com/radek-sixi/sixi-tdeck-plus/releases/tag/v0.11.4)
+**Firmware:** the [`v0.11.5` release](https://github.com/radek-sixi/sixi-tdeck-plus/releases/tag/v0.11.5)
 has one `.bin` per board, a desktop `.deb` and a firmware bundle. Verify with `sha256sum -c SHA256SUMS`.
 
 T-Deck / T-Deck Plus:
 
 | What | File | Flash at |
 |---|---|---|
-| Full image (first install / recovery) | [`faro-tdeck-0.11.4-merged.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.4/faro-tdeck-0.11.4-merged.bin) | `0x0` |
-| App only (update, keeps keys & contacts) | [`faro-tdeck-0.11.4-app.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.4/faro-tdeck-0.11.4-app.bin) | `0x10000` |
+| Full image (first install / recovery) | [`faro-tdeck-0.11.5-merged.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.5/faro-tdeck-0.11.5-merged.bin) | `0x0` |
+| App only (update, keeps keys & contacts) | [`faro-tdeck-0.11.5-app.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.5/faro-tdeck-0.11.5-app.bin) | `0x10000` |
 
 **Three ways to install:**
 
@@ -84,9 +85,10 @@ Two hidden games ship in every build — no extra download, no SD card needed.
 | Game | How to start | Controls |
 |---|---|---|
 | **Snake** | type `snake` (no text field focused) | **W/A/S/D** or swipe · **Space** pause · **N** new game · **Q** quit |
-| **2048** | type `2048` (no text field focused) | **W/A/S/D** or swipe · **N** new game · **Q** quit |
+| **2048** | type `tile` — or `2048` where a number row exists (no text field focused) | **W/A/S/D** or swipe · **N** new game · **Q** quit |
 
-They start from anywhere — Home, Settings, a chat — as long as you are not typing in a text field.
+On the T-Deck keyboard type `tile`: the digit layer is awkward, and letters work everywhere.
+The games start from anywhere — Home, Settings, a chat — as long as you are not typing in a text field.
 The snake board reuses the map canvas buffer, so it costs no extra framebuffer memory.
 
 | Snake | 2048 after a few moves |

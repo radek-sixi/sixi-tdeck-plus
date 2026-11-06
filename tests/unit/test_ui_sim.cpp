@@ -156,6 +156,12 @@ int main() {
   // update2048() forces a full-screen invalidation because LVGL 9.3 coalesces style-only
   // changes on already-rendered objects; before that fix the whole board re-rendered white.
   {
+    app.showScreen(faro::ui::ScreenId::Home);
+    for (const char* k = "tile"; *k; ++k) app.onKeyPress(uint8_t(*k));  // letter alias for 2048
+    assert(app.currentScreen() == faro::ui::ScreenId::Game2048);
+    app.onKeyPress('q');
+    assert(app.currentScreen() == faro::ui::ScreenId::Home);
+
     app.showScreen(faro::ui::ScreenId::Game2048);
     for (int mv = 0; mv < 4; ++mv) {
       app.onKeyPress("wdsa"[mv % 4]);

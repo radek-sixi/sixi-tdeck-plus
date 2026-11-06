@@ -472,7 +472,7 @@ void App::buildDiagnosticsView(lv_obj_t* parent) {
     lv_obj_set_width(hint, 298);
     lv_obj_set_style_text_font(hint, &faro_font_12, 0);
     lv_obj_set_style_text_color(hint, p.text_secondary, 0);
-    lv_label_set_text(hint, "Space=Map | Esc=Home | long-press msg=del\ntype \"snake\" for a game");
+    lv_label_set_text(hint, "Space=Map | Esc=Home | long-press msg=del\ntype \"snake\" or \"tile\" for a game");
     return;
   }
 

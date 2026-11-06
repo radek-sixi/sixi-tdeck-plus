@@ -1,13 +1,13 @@
 {
-  "name": "Faro 0.11.4 — Elecrow ThinkNode M9",
-  "version": "0.11.4",
+  "name": "Faro 0.11.5 — Elecrow ThinkNode M9",
+  "version": "0.11.5",
   "new_install_prompt_erase": false,
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "parts": [
         {
-          "path": "https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.4/faro-thinknode-m9-0.11.4-merged.bin",
+          "path": "https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.5/faro-thinknode-m9-0.11.5-merged.bin",
           "offset": 0
         }
       ]
