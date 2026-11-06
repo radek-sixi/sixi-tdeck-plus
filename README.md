@@ -9,27 +9,7 @@ companion firmware. It runs on the device next to the normal companion interface
   companion opcodes.
 - **Licence:** Apache-2.0 (see `LICENSE`, `NOTICE`, `LICENSES/`, `docs/THIRD_PARTY.md`).
 - **Status:** 0.11.5, pre-1.0. Release binaries are 0.11.5 (see `docs/FLASHING.md`). Test it on your own
-  hardware before relying on it. 0.10.3 added Wi-Fi network scanning, I2S audio notifications, touch map
-  drag/pan, emoji support, preset dropdowns, high-contrast textbox focus/cursor, and MicroSD backup fixes;
-  0.10.4 fixed ESP32-S3 Wi-Fi scan driver parameters, BLE MITM pairing & bond recovery, screen idle
-  dimming/sleep, graphical emoji glyphs and Settings tab navigation; 0.10.6 fixed Wi-Fi configured at
-  runtime (the TCP interface was never enabled), restored network scanning with an Arduino fallback,
-  kept modem sleep enabled for BLE+Wi-Fi coexistence, and made offline map PNG tiles decode from
-  PSRAM with a 9-tile cache (cached pan ~8 ms instead of repeated failed decodes). 0.10.6 also removed
-  the community lone-worker/dead-man timer. 0.10.7 added a **Reconnect** action when Wi-Fi is already
-  connected and a **Show/Hide** toggle for the password currently being typed. 0.10.8 added a hidden
-  **Snake** easter egg: type `snake` while no text field is focused. 0.11.0 adds message management
-  (delete/clear/search a thread and jump to the first unread), a configurable CPU profile (Auto /
-  240 / 160 / 80 MHz) and an About/Support tab with version, reset reason, heap and shortcuts.
-  0.11.1 adds phone Wi-Fi setup (temporary WPA2 access point `Faro-XXXX` with a small web form, auto-stops
-  after 5 min), a **2048** easter egg (type `2048` outside a text field) and a north arrow + 40 px
-  scale bar on the map. 0.11.2 splits `App.cpp` into themed translation units with shared helpers in
-  `AppUiShared.h` — no functional change. 0.11.3 declutters the map: at most the 8 contact pins closest
-  to the map centre are drawn (the rest collapse into a "+N more" badge) and the GPS/SD status moved
-  off the canvas into the bottom HUD button. 0.11.4 fixes the 2048 board not repainting after a move
-  (LVGL 9.3 coalesces style-only changes; `update2048` now forces a full-screen invalidation) and adds
-  a pixel-level regression test for it. 0.11.5 adds a letter alias for the 2048 easter egg: type
-  `tile` (the T-Deck digit layer is awkward; `2048` still works where a number row exists).
+  hardware before relying on it.
 
 ## Download & install
 
