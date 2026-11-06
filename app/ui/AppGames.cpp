@@ -444,6 +444,11 @@ void App::update2048() {
       }
     }
   }
+  // LVGL 9.3 coalesces style-only changes on already-rendered rounded objects; the partial
+  // invalidation from set_style alone does not repaint the tiles (seen on host and it would hit
+  // the device the same way). A full-screen invalidation is ~1 ms on the 320x240 panel and
+  // guarantees every move is visible immediately.
+  lv_obj_invalidate(lv_screen_active());
 }
 
 void App::buildGame2048View(lv_obj_t* parent) {

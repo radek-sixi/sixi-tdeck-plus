@@ -152,17 +152,8 @@ void App::buildMapView(lv_obj_t* parent) {
     lv_obj_set_style_text_font(gpxl, &faro_font_12, 0);
     lv_label_set_text(gpxl, "GPX");
     lv_obj_center(gpxl);
-  } else {
-    lv_obj_t* src_lbl = lv_label_create(canvas);
-    lv_obj_set_style_text_font(src_lbl, &faro_font_12, 0);
-    lv_obj_set_style_text_color(src_lbl, _tiles.lastRenderUsedSdTiles() ? p.success : p.text_secondary, 0);
-    lv_obj_set_width(src_lbl, 130);  // keep the top-centre clear for the north arrow
-    lv_label_set_long_mode(src_lbl, LV_LABEL_LONG_DOT);
-    lv_label_set_text_fmt(src_lbl, "%s | %s",
-                          g.valid ? "GPS LOCK" : "No fix",
-                          _tiles.lastRenderUsedSdTiles() ? "SD Tiles OK" : "Grid Map");
-    lv_obj_set_pos(src_lbl, 4, 2);
   }
+  // GPS/SD state lives on the bottom HUD bar now — the map itself stays clean.
 
   // Overlay self crosshair & contact pins on canvas
   lv_obj_t* self_pin = lv_label_create(canvas);
@@ -178,9 +169,39 @@ void App::buildMapView(lv_obj_t* parent) {
 
   int32_t used_sy[16] = {0};
   size_t used_count = 0;
-  for (size_t i = 0; i < AppStore::kMaxContacts; ++i) {
-    const auto& c = _store.contacts()[i];
-    if (!c.valid || !c.hasGps()) continue;
+
+  // Contact pins: show at most the 8 closest to the map centre; the rest collapse into a "+N"
+  // badge so dozens of GPS contacts never bury the map in text.
+  struct PinCand { size_t idx; double d2; };
+  static PinCand s_cand[AppStore::kMaxContacts];
+  size_t cand_n = 0;
+  {
+    const double cos_lat = cos(clat * 3.14159265358979323846 / 180.0);
+    for (size_t i = 0; i < AppStore::kMaxContacts; ++i) {
+      const auto& c = _store.contacts()[i];
+      if (!c.valid || !c.hasGps()) continue;
+      const double dlat = c.latDeg() - clat;
+      const double dlon = (c.lonDeg() - clon) * cos_lat;
+      s_cand[cand_n].idx = i;
+      s_cand[cand_n].d2 = dlat * dlat + dlon * dlon;
+      ++cand_n;
+    }
+    for (size_t i = 1; i < cand_n; ++i) {  // insertion sort, ascending distance
+      const PinCand v = s_cand[i];
+      size_t j = i;
+      while (j > 0 && s_cand[j - 1].d2 > v.d2) {
+        s_cand[j] = s_cand[j - 1];
+        --j;
+      }
+      s_cand[j] = v;
+    }
+  }
+  constexpr size_t kMaxMapPins = 8;
+  const size_t shown = cand_n < kMaxMapPins ? cand_n : kMaxMapPins;
+  const size_t hidden = cand_n - shown;
+
+  for (size_t k = 0; k < shown; ++k) {
+    const auto& c = _store.contacts()[s_cand[k].idx];
     int tx = 0, ty = 0, px = 0, py = 0;
     geomath::latLonToTilePixel(c.latDeg(), c.lonDeg(), _map_zoom, tx, ty, px, py);
     int32_t wx = tx * 256 + px;
@@ -207,6 +228,14 @@ void App::buildMapView(lv_obj_t* parent) {
     strncpy(short_nm, c.name, 9);
     lv_label_set_text_fmt(pin, "*%s", short_nm);
     lv_obj_set_pos(pin, sx, sy);
+  }
+
+  if (hidden > 0) {
+    lv_obj_t* more_lbl = lv_label_create(canvas);
+    lv_obj_set_style_text_font(more_lbl, &faro_font_12, 0);
+    lv_obj_set_style_text_color(more_lbl, p.text_secondary, 0);
+    lv_label_set_text_fmt(more_lbl, "+%u more", unsigned(hidden));
+    lv_obj_set_pos(more_lbl, 4, (_show_tracks_overlay && trk.point_count > 0) ? 16 : 2);
   }
 
   // Overlay Range-Test SNR Heatmap samples if recorded
@@ -336,14 +365,26 @@ void App::buildMapView(lv_obj_t* parent) {
     lv_label_set_text_fmt(coord, "Z%d %s", _map_zoom, ll);
   }
 
-  const char* kMapBtns[3] = {g.valid ? "GPS" : "Ctr", "-", "+"};
+  // Button 0 doubles as the map status: "GPS" (fix, SD tiles) / "GPS!" (fix, grid fallback) / "Ctr".
+  const bool sd_tiles = _tiles.lastRenderUsedSdTiles();
+  char gps_txt[8] = {0};
+  snprintf(gps_txt, sizeof(gps_txt), "%s%s", g.valid ? "GPS" : "Ctr", sd_tiles ? "" : "!");
+  const char* kMapBtns[3] = {gps_txt, "-", "+"};
   struct MapBtnCtx { App* app; int idx; };
   static MapBtnCtx s_mctx[3];
   for (int b = 0; b < 3; ++b) {
     lv_obj_t* mb = lv_button_create(hud);
     lv_obj_set_size(mb, b == 0 ? 44 : 36, 22);
-    Theme::styleTouchButton(mb, (b == 1 || b == 2) ? p.accent : p.surface_alt,
-                            (b == 1 || b == 2) ? lv_color_hex(0xFFFFFF) : p.text_primary);
+    lv_color_t bg = p.surface_alt;
+    lv_color_t fg = p.text_primary;
+    if (b == 1 || b == 2) {
+      bg = p.accent;
+      fg = lv_color_hex(0xFFFFFF);
+    } else if (g.valid) {
+      bg = sd_tiles ? p.success : p.warning;  // fix OK vs no offline tiles
+      fg = lv_color_hex(0xFFFFFF);
+    }
+    Theme::styleTouchButton(mb, bg, fg);
     s_mctx[b] = {this, b};
     lv_obj_add_event_cb(mb, [](lv_event_t* e) {
       auto* ctx = static_cast<MapBtnCtx*>(lv_event_get_user_data(e));

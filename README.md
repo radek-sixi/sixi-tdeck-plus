@@ -8,7 +8,7 @@ companion firmware. It runs on the device next to the normal companion interface
   Faro attaches through upstream's `platformio.local.ini` hook and the `AbstractUITask` listener; it adds no
   companion opcodes.
 - **Licence:** Apache-2.0 (see `LICENSE`, `NOTICE`, `LICENSES/`, `docs/THIRD_PARTY.md`).
-- **Status:** 0.11.2, pre-1.0. Release binaries are 0.11.2 (see `docs/FLASHING.md`). Test it on your own
+- **Status:** 0.11.4, pre-1.0. Release binaries are 0.11.4 (see `docs/FLASHING.md`). Test it on your own
   hardware before relying on it. 0.10.3 added Wi-Fi network scanning, I2S audio notifications, touch map
   drag/pan, emoji support, preset dropdowns, high-contrast textbox focus/cursor, and MicroSD backup fixes;
   0.10.4 fixed ESP32-S3 Wi-Fi scan driver parameters, BLE MITM pairing & bond recovery, screen idle
@@ -24,19 +24,23 @@ companion firmware. It runs on the device next to the normal companion interface
   0.11.1 adds phone Wi-Fi setup (temporary WPA2 access point `Faro-XXXX` with a small web form, auto-stops
   after 5 min), a **2048** easter egg (type `2048` outside a text field) and a north arrow + 40 px
   scale bar on the map. 0.11.2 splits `App.cpp` into themed translation units with shared helpers in
-  `AppUiShared.h` — no functional change.
+  `AppUiShared.h` — no functional change. 0.11.3 declutters the map: at most the 8 contact pins closest
+  to the map centre are drawn (the rest collapse into a "+N more" badge) and the GPS/SD status moved
+  off the canvas into the bottom HUD button. 0.11.4 fixes the 2048 board not repainting after a move
+  (LVGL 9.3 coalesces style-only changes; `update2048` now forces a full-screen invalidation) and adds
+  a pixel-level regression test for it.
 
 ## Download & install
 
-**Firmware:** the [`v0.11.2` release](https://github.com/radek-sixi/sixi-tdeck-plus/releases/tag/v0.11.2)
+**Firmware:** the [`v0.11.4` release](https://github.com/radek-sixi/sixi-tdeck-plus/releases/tag/v0.11.4)
 has one `.bin` per board, a desktop `.deb` and a firmware bundle. Verify with `sha256sum -c SHA256SUMS`.
 
 T-Deck / T-Deck Plus:
 
 | What | File | Flash at |
 |---|---|---|
-| Full image (first install / recovery) | [`faro-tdeck-0.11.2-merged.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.2/faro-tdeck-0.11.2-merged.bin) | `0x0` |
-| App only (update, keeps keys & contacts) | [`faro-tdeck-0.11.2-app.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.2/faro-tdeck-0.11.2-app.bin) | `0x10000` |
+| Full image (first install / recovery) | [`faro-tdeck-0.11.4-merged.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.4/faro-tdeck-0.11.4-merged.bin) | `0x0` |
+| App only (update, keeps keys & contacts) | [`faro-tdeck-0.11.4-app.bin`](https://github.com/radek-sixi/sixi-tdeck-plus/releases/download/v0.11.4/faro-tdeck-0.11.4-app.bin) | `0x10000` |
 
 **Three ways to install:**
 
@@ -72,6 +76,22 @@ Step-by-step (back up first, then flash, then verify): **[`docs/FLASHING.md`](do
 | ![Radio settings with the region button](docs/screenshots/settings_radio.png) | ![Welcome screen with the region choice](docs/screenshots/15_boot_wizard.png) | ![Discover with zero-hop scan answers](docs/screenshots/discover_scan.png) | ![Contact path and trace](docs/screenshots/contact_path.png) |
 
 More in [`docs/screenshots/`](docs/screenshots/).
+
+## 🎮 Easter eggs
+
+Two hidden games ship in every build — no extra download, no SD card needed.
+
+| Game | How to start | Controls |
+|---|---|---|
+| **Snake** | type `snake` (no text field focused) | **W/A/S/D** or swipe · **Space** pause · **N** new game · **Q** quit |
+| **2048** | type `2048` (no text field focused) | **W/A/S/D** or swipe · **N** new game · **Q** quit |
+
+They start from anywhere — Home, Settings, a chat — as long as you are not typing in a text field.
+The snake board reuses the map canvas buffer, so it costs no extra framebuffer memory.
+
+| Snake | 2048 after a few moves |
+|---|---|
+| ![Snake easter egg](docs/screenshots/16_snake.png) | ![2048 easter egg](docs/screenshots/17_2048_play.png) |
 
 ## Boards
 

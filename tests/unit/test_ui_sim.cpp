@@ -4,6 +4,7 @@
 #include <lvgl.h>
 #include <stdio.h>
 #include <string.h>
+#include <functional>
 
 #include "core/AppStore.h"
 #include "core/EventBus.h"
@@ -100,6 +101,80 @@ int main() {
   }
   app.onKeyPress('n');  // New game
   app.onKeyPress('q');  // Exit back to Home
+
+  // Map pin cap: with >8 GPS contacts only the 8 closest to the map centre render, plus a "+N more" badge
+  {
+    size_t before = store.contactCount();
+    for (int i = 0; i < 12; ++i) {
+      faro::core::ContactRecord c{};
+      for (int b = 0; b < 32; ++b) c.pub_key[b] = uint8_t(0x90 + i * 5 + b);
+      snprintf(c.name, sizeof(c.name), "Node%02d", i);
+      c.role = faro::core::NodeRole::ChatNode;
+      c.valid = true;
+      c.gps_lat_e6 = int32_t(46000000 + (i - 6) * 6000);  // spread N/S around Zermatt
+      c.gps_lon_e6 = int32_t(7750000 + (i - 6) * 7000);   // spread E/W
+      store.upsertContact(c);
+    }
+    assert(store.contactCount() == before + 12);
+    app.showScreen(faro::ui::ScreenId::Map);
+    lv_tick_inc(25);
+    lv_timer_handler();
+    lv_refr_now(disp);
+
+    size_t total_gps = 0;
+    for (size_t i = 0; i < faro::core::AppStore::kMaxContacts; ++i) {
+      if (store.contacts()[i].valid && store.contacts()[i].hasGps()) ++total_gps;
+    }
+    assert(total_gps > 8);
+
+    size_t pins = 0;
+    bool badge = false;
+    char badge_txt[24] = {0};
+    std::function<void(lv_obj_t*)> walk = [&](lv_obj_t* o) {
+      for (uint32_t i = 0; i < lv_obj_get_child_count(o); ++i) {
+        lv_obj_t* ch = lv_obj_get_child(o, i);
+        if (lv_obj_get_class(ch) == &lv_label_class) {
+          const char* t = lv_label_get_text(ch);
+          if (t && t[0] == '*') ++pins;
+          if (t && strstr(t, " more")) {
+            badge = true;
+            strncpy(badge_txt, t, sizeof(badge_txt) - 1);
+          }
+        }
+        walk(ch);
+      }
+    };
+    walk(lv_screen_active());
+    assert(pins == 8);
+    assert(badge);
+    char expect[24] = {0};
+    snprintf(expect, sizeof(expect), "+%u more", unsigned(total_gps - 8));
+    assert(strcmp(badge_txt, expect) == 0);
+  }
+
+  // 2048 repaint regression: moves must repaint the tiles, not leave the board white.
+  // update2048() forces a full-screen invalidation because LVGL 9.3 coalesces style-only
+  // changes on already-rendered objects; before that fix the whole board re-rendered white.
+  {
+    app.showScreen(faro::ui::ScreenId::Game2048);
+    for (int mv = 0; mv < 4; ++mv) {
+      app.onKeyPress("wdsa"[mv % 4]);
+      lv_tick_inc(25);
+      lv_timer_handler();
+      lv_refr_now(disp);
+    }
+    constexpr uint16_t kNavy565 = 4292;  // 0x161B22 in RGB565 (empty-tile colour)
+    size_t navy = 0, white = 0;
+    for (int y = 48; y <= 190; ++y) {
+      for (int x = 9; x <= 149; ++x) {
+        const uint16_t px = g_test_fb[y * 320 + x];
+        if (px == kNavy565) ++navy;
+        else if (px == 0xFFFF) ++white;
+      }
+    }
+    assert(navy > 8000);   // most tiles are empty navy after four moves from a fresh game
+    assert(white < 300);   // at most the white digits of one >=8 tile; the bug left ~17k white
+  }
 
   // Test DM send + simulated ACK via EventBus
   uint32_t crc = 0;
